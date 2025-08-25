@@ -22,7 +22,7 @@ def main():
 
     try:
         uvicorn.run(
-            app,
+            "app.main:app",  # Use import string instead of app object
             host="0.0.0.0",
             port=8000,
             reload=True,

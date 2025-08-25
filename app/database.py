@@ -16,10 +16,23 @@ class DatabaseManager:
 
     def __init__(self):
         """Initialize Supabase client."""
-        self.supabase: Client = create_client(
-            settings.supabase_url,
-            settings.supabase_key
-        )
+        try:
+            # Only initialize if we have valid settings
+            if hasattr(settings, 'supabase_url') and hasattr(settings, 'supabase_key'):
+                if settings.supabase_url and settings.supabase_key:
+                    self.supabase: Client = create_client(
+                        settings.supabase_url,
+                        settings.supabase_key
+                    )
+                else:
+                    logger.warning("Supabase credentials not configured. Database operations will be disabled.")
+                    self.supabase = None
+            else:
+                logger.warning("Supabase settings not found. Database operations will be disabled.")
+                self.supabase = None
+        except Exception as e:
+            logger.error(f"Failed to initialize Supabase client: {e}")
+            self.supabase = None
 
     async def initialize_tables(self):
         """Create tables if they don't exist."""
@@ -75,6 +88,9 @@ class DatabaseManager:
 
     async def create_person(self, person_data: PersonCreate) -> Person:
         """Create a new person in the database."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
         try:
             data = {
                 "name": person_data.name,

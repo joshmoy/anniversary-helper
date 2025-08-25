@@ -38,10 +38,44 @@ The monthly CSV should contain columns:
 ## Quick Start
 
 1. Clone this repository
-2. Install dependencies: `pip install -r requirements.txt`
-3. Set up environment variables (see `.env.example`)
-4. Upload your CSV data
-5. Run the application: `python main.py`
+2. Create and activate virtual environment:
+
+   **Option A: Using UV (Recommended - Much Faster)**
+
+   ```bash
+   # Install UV if you haven't already
+   curl -LsSf https://astral.sh/uv/install.sh | sh  # macOS/Linux
+   # or: pip install uv
+
+   # Create and activate venv with UV
+   uv venv
+   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   ```
+
+   **Option B: Using Standard Python venv**
+
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+3. Install dependencies:
+
+   **With UV (Faster):**
+
+   ```bash
+   uv pip install -r requirements.txt
+   ```
+
+   **With pip:**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Set up environment variables (see `.env.example`)
+5. Upload your CSV data
+6. Run the application: `python run.py`
 
 ## Configuration
 
