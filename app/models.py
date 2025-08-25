@@ -20,6 +20,7 @@ class PersonBase(BaseModel):
     event_date: str = Field(..., description="Date in MM-DD format (e.g., '03-15')")
     year: Optional[int] = Field(None, description="Year of birth/marriage for age calculation")
     spouse: Optional[str] = Field(None, description="Spouse name for anniversaries")
+    phone_number: Optional[str] = Field(None, description="Phone number for WhatsApp/SMS")
     active: bool = Field(True, description="Whether this person is active in the system")
 
 
@@ -35,6 +36,7 @@ class PersonUpdate(BaseModel):
     event_date: Optional[str] = None
     year: Optional[int] = None
     spouse: Optional[str] = None
+    phone_number: Optional[str] = None
     active: Optional[bool] = None
 
 

@@ -32,6 +32,7 @@ class CSVManager:
         errors = []
 
         required_columns = ['name', 'type', 'date']
+        optional_columns = ['year', 'spouse', 'phone_number']
         missing_columns = [col for col in required_columns if col not in df.columns]
 
         if missing_columns:
@@ -83,6 +84,7 @@ class CSVManager:
                     event_date = str(row['date']).strip()
                     year = int(row['year']) if pd.notna(row.get('year')) and row.get('year') != '' else None
                     spouse = str(row['spouse']).strip() if pd.notna(row.get('spouse')) and row.get('spouse') != '' else None
+                    phone_number = str(row['phone_number']).strip() if pd.notna(row.get('phone_number')) and row.get('phone_number') != '' else None
 
                     # Create person data
                     person_data = PersonCreate(
@@ -91,6 +93,7 @@ class CSVManager:
                         event_date=event_date,
                         year=year,
                         spouse=spouse,
+                        phone_number=phone_number,
                         active=True
                     )
 
@@ -299,14 +302,15 @@ class AIMessageGenerator:
             response = self.groq_client.chat.completions.create(
                 model="llama3-8b-8192",
                 messages=[
-                    {"role": "system", "content": "You are a Christian pastor writing celebration messages for church members. Your messages should be warm, godly, and include appropriate Bible verses."},
+                    {"role": "system", "content": "You are a Christian pastor writing celebration messages for church members. Your messages should be warm, godly, and include appropriate Bible verses. Return ONLY the message content without any introductory or closing text."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=200,
                 temperature=0.7
             )
 
-            return response.choices[0].message.content.strip()
+            message = response.choices[0].message.content.strip()
+            return self._clean_ai_message(message)
 
         except Exception as e:
             logger.error(f"Error generating message with Groq: {e}")
@@ -341,14 +345,15 @@ class AIMessageGenerator:
             response = self.openai_client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "You are a Christian pastor writing celebration messages for church members."},
+                    {"role": "system", "content": "You are a Christian pastor writing celebration messages for church members. Return ONLY the message content without any introductory or closing text."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=200,
                 temperature=0.7
             )
 
-            return response.choices[0].message.content.strip()
+            message = response.choices[0].message.content.strip()
+            return self._clean_ai_message(message)
 
         except Exception as e:
             logger.error(f"Error generating message with OpenAI: {e}")
@@ -376,6 +381,44 @@ class AIMessageGenerator:
                 message = f"💕 Happy Anniversary, {name}! May God's love continue to strengthen your marriage."
 
         return f"{message} - {selected_verse['verse']} ({selected_verse['reference']})"
+
+    def _clean_ai_message(self, message: str) -> str:
+        """Clean AI-generated message by removing unwanted introductory and closing text."""
+        # Remove common introductory phrases
+        intro_patterns = [
+            r"Here is a warm, Christian birthday message for [^:]+:",
+            r"Here is a warm, Christian anniversary message for [^:]+:",
+            r"Here is a Christian birthday message for [^:]+:",
+            r"Here is a Christian anniversary message for [^:]+:",
+            r"Here's a warm, Christian birthday message for [^:]+:",
+            r"Here's a warm, Christian anniversary message for [^:]+:",
+            r"Here's a Christian birthday message for [^:]+:",
+            r"Here's a Christian anniversary message for [^:]+:",
+        ]
+
+        # Remove common closing phrases
+        closing_patterns = [
+            r"I hope this message meets your requirements[^!]*!?",
+            r"Please let me know if you have any further requests[^!]*!?",
+            r"I hope this helps[^!]*!?",
+            r"Let me know if you need anything else[^!]*!?",
+        ]
+
+        import re
+
+        # Clean introductory text
+        for pattern in intro_patterns:
+            message = re.sub(pattern, "", message, flags=re.IGNORECASE).strip()
+
+        # Clean closing text
+        for pattern in closing_patterns:
+            message = re.sub(pattern, "", message, flags=re.IGNORECASE).strip()
+
+        # Remove extra whitespace and newlines
+        message = re.sub(r'\n\s*\n', '\n', message)  # Remove multiple newlines
+        message = re.sub(r'^\s+|\s+$', '', message)  # Remove leading/trailing whitespace
+
+        return message
 
     async def generate_celebration_message(self, person: Person) -> str:
         """Generate a celebration message for a person."""
@@ -480,7 +523,7 @@ class WhatsAppMessenger:
             }
 
     async def send_daily_celebrations(self) -> Dict[str, Any]:
-        """Send celebration messages for all people with events today."""
+        """Send a single consolidated message for all people with events today."""
         try:
             # Get today's celebrations
             celebrations = await date_manager.get_todays_celebrations()
@@ -493,29 +536,41 @@ class WhatsAppMessenger:
                     "sent_count": 0
                 }
 
-            sent_count = 0
-            failed_count = 0
-            errors = []
+            # Generate consolidated message
+            consolidated_message = await self.generate_consolidated_celebration_message(celebrations)
 
-            # Send message for each celebration
+            # Send the single consolidated message
+            result = await self.send_message(consolidated_message)
+
+            # Log the message attempt for all people
             for person in celebrations:
-                result = await self.send_celebration_message(person)
+                await db_manager.log_message(
+                    person_id=person.id,
+                    message_content=consolidated_message,
+                    sent_date=date.today(),
+                    success=result["success"],
+                    error_message=result.get("error")
+                )
 
-                if result["success"]:
-                    sent_count += 1
-                    logger.info(f"Sent celebration message for {person.name}")
-                else:
-                    failed_count += 1
-                    errors.append(f"{person.name}: {result.get('error', 'Unknown error')}")
-                    logger.error(f"Failed to send message for {person.name}: {result.get('error')}")
-
-            return {
-                "success": failed_count == 0,
-                "sent_count": sent_count,
-                "failed_count": failed_count,
-                "errors": errors,
-                "total_celebrations": len(celebrations)
-            }
+            if result["success"]:
+                logger.info(f"Sent consolidated celebration message for {len(celebrations)} people")
+                return {
+                    "success": True,
+                    "sent_count": 1,  # One consolidated message
+                    "failed_count": 0,
+                    "errors": [],
+                    "total_celebrations": len(celebrations),
+                    "message": "Consolidated celebration message sent successfully"
+                }
+            else:
+                logger.error(f"Failed to send consolidated message: {result.get('error')}")
+                return {
+                    "success": False,
+                    "sent_count": 0,
+                    "failed_count": 1,
+                    "errors": [result.get("error", "Unknown error")],
+                    "total_celebrations": len(celebrations)
+                }
 
         except Exception as e:
             logger.error(f"Error in daily celebrations: {e}")
@@ -524,6 +579,81 @@ class WhatsAppMessenger:
                 "error": str(e),
                 "sent_count": 0
             }
+
+    async def generate_consolidated_celebration_message(self, celebrations: List[Person]) -> str:
+        """Generate a single consolidated message for all today's celebrations."""
+        try:
+            logger.info(f"Generating consolidated message for {len(celebrations)} celebrations")
+
+            # Separate birthdays and anniversaries
+            birthdays = [p for p in celebrations if p.event_type == EventType.BIRTHDAY]
+            anniversaries = [p for p in celebrations if p.event_type == EventType.ANNIVERSARY]
+
+            logger.info(f"Found {len(birthdays)} birthdays and {len(anniversaries)} anniversaries")
+
+            # Start with greeting
+            message_parts = ["Good morning, beloved! 🌅✨"]
+            message_parts.append("")  # Empty line
+
+            # Add birthday celebrations
+            if birthdays:
+                for person in birthdays:
+                    phone_text = f" ({person.phone_number})" if person.phone_number else " (insert phone number)"
+                    message_parts.append(f"Today is {person.name}'s birthday{phone_text}! 🥳🎉")
+                message_parts.append("")  # Empty line
+
+            # Add anniversary celebrations
+            if anniversaries:
+                for person in anniversaries:
+                    phone_text = f" ({person.phone_number})" if person.phone_number else " (insert phone number)"
+                    message_parts.append(f"Today is {person.name}'s anniversary{phone_text}! 💕🎊")
+                message_parts.append("")  # Empty line
+
+            # Add celebration instructions
+            message_parts.append("Please let's celebrate with them via text, WhatsApp call, or WhatsApp message! 📱💝")
+            message_parts.append("")
+            message_parts.append("You can send your wishes on this platform for 24 hours.")
+            message_parts.append("")
+            message_parts.append("You are next to be celebrated in Jesus' name, Amen! 🙏")
+            message_parts.append("")
+
+            # Add Bible verse
+            bible_verses = ai_generator.get_bible_verses()
+            selected_verse = random.choice(bible_verses)
+            message_parts.append(f'"{selected_verse["verse"]}" - {selected_verse["reference"]}')
+            message_parts.append("")
+
+            # Add closing
+            message_parts.append("God bless! 🙌")
+            message_parts.append("🥳🎉🎈🎁🎊❤️🍰🥧🎵")
+
+            return "\n".join(message_parts)
+
+        except Exception as e:
+            logger.error(f"Error generating consolidated message: {e}")
+            logger.error(f"Exception details: {type(e).__name__}: {str(e)}")
+            # Fallback to detailed message with occasions
+            message_parts = ["Good morning, beloved! 🌅✨", ""]
+
+            for person in celebrations:
+                occasion = "birthday" if person.event_type == EventType.BIRTHDAY else "anniversary"
+                emoji = "🥳🎉" if person.event_type == EventType.BIRTHDAY else "💕🎊"
+                phone_text = f" ({person.phone_number})" if person.phone_number else " (insert phone number)"
+                message_parts.append(f"Today is {person.name}'s {occasion}{phone_text}! {emoji}")
+
+            message_parts.extend([
+                "",
+                "Please let's celebrate with them via text, WhatsApp call, or WhatsApp message! 📱�",
+                "",
+                "You can send your wishes on this platform for 24 hours.",
+                "",
+                "You are next to be celebrated in Jesus' name, Amen! 🙏",
+                "",
+                "God bless! 🙌",
+                "🥳🎉🎈🎁🎊❤️🍰🥧🎵"
+            ])
+
+            return "\n".join(message_parts)
 
 
 # Global service instances

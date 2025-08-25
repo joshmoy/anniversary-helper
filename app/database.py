@@ -98,6 +98,7 @@ class DatabaseManager:
                 "event_date": person_data.event_date,
                 "year": person_data.year,
                 "spouse": person_data.spouse,
+                "phone_number": person_data.phone_number,
                 "active": person_data.active
             }
 
@@ -146,6 +147,7 @@ class DatabaseManager:
                     "event_date": person_data.event_date,
                     "year": person_data.year,
                     "spouse": person_data.spouse,
+                    "phone_number": person_data.phone_number,
                     "active": person_data.active,
                     "updated_at": datetime.now().isoformat()
                 }
