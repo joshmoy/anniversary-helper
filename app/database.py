@@ -180,6 +180,145 @@ class DatabaseManager:
             logger.error(f"Error logging message: {e}")
             raise
 
+    async def get_all_message_logs(self):
+        """Get all message logs with person information."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            # Get message logs with person information
+            result = self.supabase.table("message_logs").select(
+                "*, people(name, event_type, phone_number)"
+            ).order("created_at", desc=True).execute()
+
+            if result.data:
+                # Transform the data to include person info at the top level
+                messages = []
+                for log in result.data:
+                    message_data = {
+                        "id": log["id"],
+                        "person_id": log["person_id"],
+                        "message_content": log["message_content"],
+                        "sent_date": log["sent_date"],
+                        "success": log["success"],
+                        "error_message": log["error_message"],
+                        "created_at": log["created_at"],
+                        "person_name": log["people"]["name"] if log["people"] else None,
+                        "person_event_type": log["people"]["event_type"] if log["people"] else None,
+                        "person_phone": log["people"]["phone_number"] if log["people"] else None
+                    }
+                    messages.append(message_data)
+                return messages
+            return []
+
+        except Exception as e:
+            logger.error(f"Error getting message logs: {e}")
+            raise
+
+    async def get_message_log_by_id(self, message_id: int):
+        """Get a specific message log by ID."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            result = self.supabase.table("message_logs").select(
+                "*, people(name, event_type, phone_number)"
+            ).eq("id", message_id).execute()
+
+            if result.data and len(result.data) > 0:
+                log = result.data[0]
+                return {
+                    "id": log["id"],
+                    "person_id": log["person_id"],
+                    "message_content": log["message_content"],
+                    "sent_date": log["sent_date"],
+                    "success": log["success"],
+                    "error_message": log["error_message"],
+                    "created_at": log["created_at"],
+                    "person_name": log["people"]["name"] if log["people"] else None,
+                    "person_event_type": log["people"]["event_type"] if log["people"] else None,
+                    "person_phone": log["people"]["phone_number"] if log["people"] else None
+                }
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting message log {message_id}: {e}")
+            raise
+
+    async def get_person_by_id(self, person_id: int) -> Person:
+        """Get a specific person by ID."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            result = self.supabase.table("people").select("*").eq("id", person_id).execute()
+
+            if result.data and len(result.data) > 0:
+                return Person(**result.data[0])
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting person {person_id}: {e}")
+            raise
+
+    async def update_person(self, person_id: int, person_data: PersonUpdate) -> Person:
+        """Update a person's information."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            # Build update data from non-None fields
+            update_data = {}
+            if person_data.name is not None:
+                update_data["name"] = person_data.name
+            if person_data.event_type is not None:
+                update_data["event_type"] = person_data.event_type.value
+            if person_data.event_date is not None:
+                update_data["event_date"] = person_data.event_date
+            if person_data.year is not None:
+                update_data["year"] = person_data.year
+            if person_data.spouse is not None:
+                update_data["spouse"] = person_data.spouse
+            if person_data.phone_number is not None:
+                update_data["phone_number"] = person_data.phone_number
+            if person_data.active is not None:
+                update_data["active"] = person_data.active
+
+            if update_data:
+                update_data["updated_at"] = datetime.now().isoformat()
+
+                # Perform the update
+                update_result = self.supabase.table("people").update(update_data).eq("id", person_id).execute()
+                
+                # Fetch the updated record
+                if update_result.data:
+                    fetch_result = self.supabase.table("people").select("*").eq("id", person_id).execute()
+                    if fetch_result.data and len(fetch_result.data) > 0:
+                        return Person(**fetch_result.data[0])
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error updating person {person_id}: {e}")
+            raise
+
+    async def delete_person(self, person_id: int) -> bool:
+        """Soft delete a person by setting active=False."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            result = self.supabase.table("people").update({
+                "active": False,
+                "updated_at": datetime.now().isoformat()
+            }).eq("id", person_id).execute()
+
+            return result.data and len(result.data) > 0
+
+        except Exception as e:
+            logger.error(f"Error deleting person {person_id}: {e}")
+            raise
+
 
 # Global database manager instance
 db_manager = DatabaseManager()

@@ -14,7 +14,7 @@ import uvicorn
 
 from app.config import settings
 from app.database import db_manager
-from app.models import Person
+from app.models import Person, PersonUpdate
 from app.services import csv_manager, date_manager, whatsapp_messenger
 from app.scheduler import celebration_scheduler
 
@@ -68,6 +68,9 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://localhost:3001",  # Alternative port
         "http://127.0.0.1:3001",
+        "http://127.0.0.1:3002",
+        "http://localhost:3002",  # Alternative port
+        
     ],
     allow_credentials=True,
     allow_methods=["*"],  # Allow all methods (GET, POST, PUT, DELETE, etc.)
@@ -120,6 +123,51 @@ async def get_all_people():
         return await db_manager.get_all_people()
     except Exception as e:
         logger.error(f"Error getting people: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/people/{person_id}", response_model=Person)
+async def get_person(person_id: int):
+    """Get a specific person by ID."""
+    try:
+        person = await db_manager.get_person_by_id(person_id)
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found")
+        return person
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting person {person_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/people/{person_id}", response_model=Person)
+async def update_person(person_id: int, person_data: PersonUpdate):
+    """Update a person's information."""
+    try:
+        updated_person = await db_manager.update_person(person_id, person_data)
+        if not updated_person:
+            raise HTTPException(status_code=404, detail="Person not found")
+        return updated_person
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating person {person_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/people/{person_id}")
+async def delete_person(person_id: int):
+    """Delete a person (soft delete by setting active=False)."""
+    try:
+        success = await db_manager.delete_person(person_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Person not found")
+        return {"message": "Person deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting person {person_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -200,6 +248,32 @@ async def send_daily_celebrations():
         return result
     except Exception as e:
         logger.error(f"Error sending celebrations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/messages")
+async def get_message_logs():
+    """Get all message logs with delivery status."""
+    try:
+        messages = await db_manager.get_all_message_logs()
+        return messages
+    except Exception as e:
+        logger.error(f"Error getting message logs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/messages/{message_id}")
+async def get_message_log(message_id: int):
+    """Get a specific message log by ID."""
+    try:
+        message = await db_manager.get_message_log_by_id(message_id)
+        if not message:
+            raise HTTPException(status_code=404, detail="Message not found")
+        return message
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting message log {message_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
