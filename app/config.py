@@ -26,8 +26,8 @@ class Settings(BaseSettings):
     whatsapp_to: str = Field(..., env="WHATSAPP_TO")
 
     # Application Configuration
-    schedule_time: str = Field("09:00", env="SCHEDULE_TIME")
-    timezone: str = Field("America/New_York", env="TIMEZONE")
+    schedule_time: str = Field("06:00", env="SCHEDULE_TIME")
+    timezone: str = Field("Europe/London", env="TIMEZONE")
     csv_upload_path: str = Field("./data/", env="CSV_UPLOAD_PATH")
 
     # Environment
