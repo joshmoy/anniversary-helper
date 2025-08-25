@@ -56,9 +56,8 @@ logs/
 *.sqlite
 *.sqlite3
 
-# Uploaded files
-data/*.csv
-!data/sample_data.csv
+# Uploaded files now go to Supabase Storage
+# No local data directory needed
 
 # Temporary files
 tmp/

@@ -74,6 +74,7 @@ class CSVUpload(BaseModel):
     records_updated: int
     success: bool
     error_message: Optional[str] = None
+    storage_path: Optional[str] = None
 
     class Config:
         from_attributes = True

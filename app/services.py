@@ -5,9 +5,10 @@ import logging
 import pandas as pd
 from datetime import datetime, date
 from typing import List, Dict, Any, Optional
-from pathlib import Path
 import re
 import random
+import io
+import tempfile
 
 from groq import Groq
 import openai
@@ -20,12 +21,96 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+class StorageManager:
+    """Manages file operations with Supabase Storage."""
+    
+    def __init__(self):
+        """Initialize storage manager with Supabase client."""
+        self.bucket_name = settings.supabase_storage_bucket
+        
+    async def upload_csv_file(self, file_content: bytes, filename: str) -> Dict[str, Any]:
+        """Upload a CSV file to Supabase Storage."""
+        try:
+            # Generate a unique file path with timestamp
+            timestamp = datetime.now().isoformat()
+            file_path = f"uploads/{timestamp}_{filename}"
+            
+            # Upload to Supabase Storage
+            response = db_manager.supabase.storage.from_(self.bucket_name).upload(
+                path=file_path,
+                file=file_content,
+                file_options={"content-type": "text/csv"}
+            )
+            
+            if response.status_code == 200:
+                return {
+                    "success": True,
+                    "file_path": file_path,
+                    "url": self.get_public_url(file_path),
+                    "message": "File uploaded successfully"
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Upload failed with status {response.status_code}",
+                    "details": response.json() if hasattr(response, 'json') else str(response)
+                }
+                
+        except Exception as e:
+            logger.error(f"Error uploading file to storage: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def get_public_url(self, file_path: str) -> str:
+        """Get the public URL for a file in Supabase Storage."""
+        try:
+            response = db_manager.supabase.storage.from_(self.bucket_name).get_public_url(file_path)
+            # In newer versions of supabase-py, get_public_url returns a string directly
+            if isinstance(response, str):
+                return response
+            elif isinstance(response, dict):
+                return response.get('publicURL', '')
+            else:
+                return str(response)
+        except Exception as e:
+            logger.error(f"Error getting public URL: {e}")
+            return ""
+    
+    async def download_csv_file(self, file_path: str) -> bytes:
+        """Download a CSV file from Supabase Storage."""
+        try:
+            response = db_manager.supabase.storage.from_(self.bucket_name).download(file_path)
+            return response
+        except Exception as e:
+            logger.error(f"Error downloading file from storage: {e}")
+            raise
+    
+    async def delete_csv_file(self, file_path: str) -> bool:
+        """Delete a CSV file from Supabase Storage."""
+        try:
+            response = db_manager.supabase.storage.from_(self.bucket_name).remove([file_path])
+            return response.status_code == 200
+        except Exception as e:
+            logger.error(f"Error deleting file from storage: {e}")
+            return False
+    
+    async def list_csv_files(self) -> List[Dict]:
+        """List all CSV files in the storage bucket."""
+        try:
+            response = db_manager.supabase.storage.from_(self.bucket_name).list("uploads/")
+            return response if response else []
+        except Exception as e:
+            logger.error(f"Error listing files from storage: {e}")
+            return []
+
+
 class CSVManager:
-    """Handles CSV file processing and data import."""
+    """Handles CSV file processing and data import from Supabase Storage."""
 
     def __init__(self):
-        self.upload_path = Path(settings.csv_upload_path)
-        self.upload_path.mkdir(exist_ok=True)
+        pass  # No local file handling needed
 
     def validate_csv_format(self, df: pd.DataFrame) -> List[str]:
         """Validate CSV format and return list of errors."""
@@ -55,10 +140,12 @@ class CSVManager:
         return errors
 
     async def process_csv_file(self, file_path: str) -> Dict[str, Any]:
-        """Process a CSV file and import data to database."""
+        """Process a CSV file from Supabase Storage and import data to database."""
         try:
-            # Read CSV file
-            df = pd.read_csv(file_path)
+            # Download file from Supabase Storage
+            file_content = await storage_manager.download_csv_file(file_path)
+            # Read CSV from bytes
+            df = pd.read_csv(io.BytesIO(file_content))
 
             # Validate format
             validation_errors = self.validate_csv_format(df)
@@ -116,6 +203,19 @@ class CSVManager:
                     logger.error(f"Error processing row {index}: {e}")
                     continue
 
+            # Log the CSV upload to database
+            try:
+                await db_manager.log_csv_upload(
+                    filename=file_path.split('/')[-1] if '/' in file_path else file_path,
+                    records_processed=records_processed,
+                    records_added=records_added,
+                    records_updated=records_updated,
+                    success=True,
+                    storage_path=file_path
+                )
+            except Exception as log_error:
+                logger.error(f"Failed to log CSV upload: {log_error}")
+
             return {
                 "success": True,
                 "records_processed": records_processed,
@@ -125,6 +225,21 @@ class CSVManager:
 
         except Exception as e:
             logger.error(f"Error processing CSV file: {e}")
+            
+            # Log the failed upload to database
+            try:
+                await db_manager.log_csv_upload(
+                    filename=file_path.split('/')[-1] if '/' in file_path else file_path,
+                    records_processed=0,
+                    records_added=0,
+                    records_updated=0,
+                    success=False,
+                    error_message=str(e),
+                    storage_path=file_path
+                )
+            except Exception as log_error:
+                logger.error(f"Failed to log CSV upload error: {log_error}")
+            
             return {
                 "success": False,
                 "error": str(e),
@@ -657,6 +772,7 @@ class WhatsAppMessenger:
 
 
 # Global service instances
+storage_manager = StorageManager()
 csv_manager = CSVManager()
 date_manager = DateManager()
 ai_generator = AIMessageGenerator()

@@ -125,7 +125,7 @@ Visit `http://localhost:8000` to see the API documentation.
 ## Step 7: Upload Your Data
 
 1. Prepare your CSV file with columns: `name`, `type`, `date`, `year`, `spouse`
-2. Use the `/upload-csv` endpoint or copy your file to the `data/` folder
+2. Use the `/upload-csv` endpoint to upload files directly to Supabase Storage
 3. Process it using the API
 
 ## Step 8: Deploy to Railway

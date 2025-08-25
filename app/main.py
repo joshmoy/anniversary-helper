@@ -15,7 +15,7 @@ import uvicorn
 from app.config import settings
 from app.database import db_manager
 from app.models import Person, PersonUpdate
-from app.services import csv_manager, date_manager, whatsapp_messenger
+from app.services import csv_manager, date_manager, whatsapp_messenger, storage_manager
 from app.scheduler import celebration_scheduler
 
 # Configure logging
@@ -199,28 +199,35 @@ async def get_celebrations_for_date(date_str: str):
 
 @app.post("/upload-csv")
 async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    """Upload and process a CSV file with celebration data."""
+    """Upload and process a CSV file with celebration data using Supabase Storage."""
     try:
         # Validate file type
         if not file.filename.endswith('.csv'):
             raise HTTPException(status_code=400, detail="File must be a CSV")
 
-        # Save uploaded file
-        upload_path = Path(settings.csv_upload_path)
-        upload_path.mkdir(exist_ok=True)
+        # Read file content
+        file_content = await file.read()
 
-        file_path = upload_path / f"{date.today().isoformat()}_{file.filename}"
-
-        with open(file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
+        # Upload to Supabase Storage
+        upload_result = await storage_manager.upload_csv_file(file_content, file.filename)
+        
+        if not upload_result["success"]:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to upload file to storage: {upload_result.get('error', 'Unknown error')}"
+            )
 
         # Process CSV in background
-        background_tasks.add_task(process_csv_background, str(file_path))
+        background_tasks.add_task(
+            process_csv_background, 
+            upload_result["file_path"]
+        )
 
         return {
-            "message": "CSV file uploaded successfully",
+            "message": "CSV file uploaded successfully to cloud storage",
             "filename": file.filename,
+            "storage_path": upload_result["file_path"],
+            "url": upload_result.get("url"),
             "status": "processing"
         }
 
@@ -232,7 +239,7 @@ async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(
 
 
 async def process_csv_background(file_path: str):
-    """Background task to process CSV file."""
+    """Background task to process CSV file from Supabase Storage."""
     try:
         result = await csv_manager.process_csv_file(file_path)
         logger.info(f"CSV processing completed: {result}")
@@ -274,6 +281,43 @@ async def get_message_log(message_id: int):
         raise
     except Exception as e:
         logger.error(f"Error getting message log {message_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/csv-uploads")
+async def get_csv_upload_history():
+    """Get the history of all CSV uploads."""
+    try:
+        uploads = await db_manager.get_csv_upload_history()
+        return uploads
+    except Exception as e:
+        logger.error(f"Error getting CSV upload history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/csv-files")
+async def list_csv_files():
+    """List all CSV files in Supabase Storage."""
+    try:
+        files = await storage_manager.list_csv_files()
+        return {"files": files}
+    except Exception as e:
+        logger.error(f"Error listing CSV files: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/csv-files/{file_path:path}")
+async def delete_csv_file(file_path: str):
+    """Delete a CSV file from Supabase Storage."""
+    try:
+        success = await storage_manager.delete_csv_file(file_path)
+        if not success:
+            raise HTTPException(status_code=404, detail="File not found or could not be deleted")
+        return {"message": "File deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting CSV file {file_path}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

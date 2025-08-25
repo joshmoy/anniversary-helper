@@ -319,6 +319,45 @@ class DatabaseManager:
             logger.error(f"Error deleting person {person_id}: {e}")
             raise
 
+    async def log_csv_upload(self, filename: str, records_processed: int, records_added: int, 
+                            records_updated: int, success: bool, error_message: Optional[str] = None, 
+                            storage_path: Optional[str] = None) -> None:
+        """Log a CSV upload operation."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            data = {
+                "filename": filename,
+                "upload_date": datetime.now().isoformat(),
+                "records_processed": records_processed,
+                "records_added": records_added,
+                "records_updated": records_updated,
+                "success": success,
+                "error_message": error_message,
+                "storage_path": storage_path
+            }
+
+            self.supabase.table("csv_uploads").insert(data).execute()
+            logger.info(f"CSV upload log created for file {filename}")
+
+        except Exception as e:
+            logger.error(f"Error logging CSV upload: {e}")
+            raise
+
+    async def get_csv_upload_history(self) -> List[Dict[str, Any]]:
+        """Get all CSV upload history."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            result = self.supabase.table("csv_uploads").select("*").order("upload_date", desc=True).execute()
+            return result.data if result.data else []
+
+        except Exception as e:
+            logger.error(f"Error getting CSV upload history: {e}")
+            raise
+
 
 # Global database manager instance
 db_manager = DatabaseManager()
