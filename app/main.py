@@ -226,8 +226,6 @@ async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(
         return {
             "message": "CSV file uploaded successfully to cloud storage",
             "filename": file.filename,
-            "storage_path": upload_result["file_path"],
-            "url": upload_result.get("url"),
             "status": "processing"
         }
 

@@ -28,6 +28,17 @@ class StorageManager:
         """Initialize storage manager with Supabase client."""
         self.bucket_name = settings.supabase_storage_bucket
         
+        # Use service role client for storage operations (more permissions)
+        from supabase import create_client
+        if settings.supabase_service_key:
+            self.storage_client = create_client(
+                settings.supabase_url, 
+                settings.supabase_service_key
+            )
+        else:
+            # Fallback to regular client
+            self.storage_client = db_manager.supabase
+        
     async def upload_csv_file(self, file_content: bytes, filename: str) -> Dict[str, Any]:
         """Upload a CSV file to Supabase Storage."""
         try:
@@ -36,7 +47,7 @@ class StorageManager:
             file_path = f"uploads/{timestamp}_{filename}"
             
             # Upload to Supabase Storage
-            response = db_manager.supabase.storage.from_(self.bucket_name).upload(
+            response = self.storage_client.storage.from_(self.bucket_name).upload(
                 path=file_path,
                 file=file_content,
                 file_options={"content-type": "text/csv"}
@@ -66,7 +77,7 @@ class StorageManager:
     def get_public_url(self, file_path: str) -> str:
         """Get the public URL for a file in Supabase Storage."""
         try:
-            response = db_manager.supabase.storage.from_(self.bucket_name).get_public_url(file_path)
+            response = self.storage_client.storage.from_(self.bucket_name).get_public_url(file_path)
             # In newer versions of supabase-py, get_public_url returns a string directly
             if isinstance(response, str):
                 return response
@@ -81,7 +92,7 @@ class StorageManager:
     async def download_csv_file(self, file_path: str) -> bytes:
         """Download a CSV file from Supabase Storage."""
         try:
-            response = db_manager.supabase.storage.from_(self.bucket_name).download(file_path)
+            response = self.storage_client.storage.from_(self.bucket_name).download(file_path)
             return response
         except Exception as e:
             logger.error(f"Error downloading file from storage: {e}")
@@ -90,7 +101,7 @@ class StorageManager:
     async def delete_csv_file(self, file_path: str) -> bool:
         """Delete a CSV file from Supabase Storage."""
         try:
-            response = db_manager.supabase.storage.from_(self.bucket_name).remove([file_path])
+            response = self.storage_client.storage.from_(self.bucket_name).remove([file_path])
             return response.status_code == 200
         except Exception as e:
             logger.error(f"Error deleting file from storage: {e}")
@@ -99,7 +110,7 @@ class StorageManager:
     async def list_csv_files(self) -> List[Dict]:
         """List all CSV files in the storage bucket."""
         try:
-            response = db_manager.supabase.storage.from_(self.bucket_name).list("uploads/")
+            response = self.storage_client.storage.from_(self.bucket_name).list("uploads/")
             return response if response else []
         except Exception as e:
             logger.error(f"Error listing files from storage: {e}")
