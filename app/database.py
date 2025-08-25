@@ -6,7 +6,7 @@ from datetime import datetime, date
 from typing import List, Optional, Dict, Any
 from supabase import create_client, Client
 from app.config import settings
-from app.models import Person, PersonCreate, PersonUpdate, MessageLog, CSVUpload
+from app.models import Person, PersonCreate, PersonUpdate, MessageLog, CSVUpload, Admin, AdminCreate
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,19 @@ class DatabaseManager:
                 records_updated INTEGER NOT NULL,
                 success BOOLEAN NOT NULL,
                 error_message TEXT
+            );
+            """
+
+            # Create admins table
+            admins_table = """
+            CREATE TABLE IF NOT EXISTS admins (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(100) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                last_login TIMESTAMP WITH TIME ZONE
             );
             """
 
@@ -357,6 +370,82 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error getting CSV upload history: {e}")
             raise
+
+    # Admin Management Methods
+
+    async def create_admin(self, admin_data: AdminCreate, password_hash: str) -> Admin:
+        """Create a new admin user."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            data = {
+                "username": admin_data.username,
+                "password_hash": password_hash,
+                "is_active": admin_data.is_active
+            }
+
+            result = self.supabase.table("admins").insert(data).execute()
+
+            if result.data:
+                return Admin(**result.data[0])
+            else:
+                raise Exception("Failed to create admin")
+
+        except Exception as e:
+            logger.error(f"Error creating admin: {e}")
+            raise
+
+    async def get_admin_by_username(self, username: str) -> Optional[Admin]:
+        """Get an admin by username."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            result = self.supabase.table("admins").select("*").eq("username", username).execute()
+
+            if result.data and len(result.data) > 0:
+                return Admin(**result.data[0])
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting admin by username {username}: {e}")
+            raise
+
+    async def get_admin_by_id(self, admin_id: int) -> Optional[Admin]:
+        """Get an admin by ID."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            result = self.supabase.table("admins").select("*").eq("id", admin_id).execute()
+
+            if result.data and len(result.data) > 0:
+                return Admin(**result.data[0])
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting admin by ID {admin_id}: {e}")
+            raise
+
+    async def update_admin_last_login(self, admin_id: int) -> bool:
+        """Update admin's last login timestamp."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            result = self.supabase.table("admins").update({
+                "last_login": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat()
+            }).eq("id", admin_id).execute()
+
+            return result.data and len(result.data) > 0
+
+        except Exception as e:
+            logger.error(f"Error updating admin last login {admin_id}: {e}")
+            raise
+
+
 
 
 # Global database manager instance

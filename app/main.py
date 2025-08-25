@@ -7,16 +7,17 @@ from datetime import date
 from typing import List, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, status, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from app.config import settings
 from app.database import db_manager
-from app.models import Person, PersonUpdate
+from app.models import Person, PersonUpdate, LoginRequest, LoginResponse, AdminBase
 from app.services import csv_manager, date_manager, whatsapp_messenger, storage_manager
 from app.scheduler import celebration_scheduler
+from app.auth import auth_service, get_current_admin
 
 # Configure logging
 logging.basicConfig(
@@ -113,6 +114,97 @@ async def health_check():
                 "status": "unhealthy",
                 "error": str(e)
             }
+        )
+
+
+@app.post("/auth/login", response_model=LoginResponse)
+async def login(login_data: LoginRequest):
+    """
+    Admin login endpoint.
+    
+    Creates a session token for authenticated admin users.
+    """
+    try:
+        # Get admin by username
+        admin = await db_manager.get_admin_by_username(login_data.username)
+        
+        if not admin:
+            logger.warning(f"Login attempt with invalid username: {login_data.username}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password"
+            )
+        
+        # Check if admin is active
+        if not admin.is_active:
+            logger.warning(f"Login attempt with inactive admin: {login_data.username}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Account is deactivated"
+            )
+        
+        # Verify password
+        if not auth_service.verify_password(login_data.password, admin.password_hash):
+            logger.warning(f"Login attempt with invalid password for user: {login_data.username}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password"
+            )
+        
+        # Update last login timestamp
+        await db_manager.update_admin_last_login(admin.id)
+        
+        # Create access token
+        token_data = {
+            "sub": admin.id,
+            "username": admin.username,
+            "type": "access"
+        }
+        access_token = auth_service.create_access_token(token_data)
+        
+        logger.info(f"Successful login for admin: {admin.username}")
+        
+        return LoginResponse(
+            access_token=access_token,
+            token_type="bearer",
+            expires_in=settings.jwt_access_token_expire_minutes * 60,  # Convert to seconds
+            admin=AdminBase(username=admin.username, is_active=admin.is_active)
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during login: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error during login"
+        )
+
+
+@app.get("/auth/me", response_model=AdminBase)
+async def get_current_admin_info(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """
+    Get current authenticated admin information.
+    
+    This endpoint can be used to verify authentication tokens.
+    """
+    try:
+        admin = await db_manager.get_admin_by_id(current_admin["id"])
+        if not admin:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Admin not found"
+            )
+        
+        return AdminBase(username=admin.username, is_active=admin.is_active)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting current admin info: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
         )
 
 

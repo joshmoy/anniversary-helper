@@ -78,3 +78,40 @@ class CSVUpload(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AdminBase(BaseModel):
+    """Base model for admin data."""
+    username: str = Field(..., description="Admin username")
+    is_active: bool = Field(True, description="Whether this admin account is active")
+
+
+class AdminCreate(AdminBase):
+    """Model for creating a new admin."""
+    password: str = Field(..., description="Plain text password (will be hashed)")
+
+
+class Admin(AdminBase):
+    """Complete admin model with database fields."""
+    id: int
+    password_hash: str = Field(..., description="Hashed password")
+    created_at: datetime
+    updated_at: datetime
+    last_login: Optional[datetime] = Field(None, description="Last login timestamp")
+
+    class Config:
+        from_attributes = True
+
+
+class LoginRequest(BaseModel):
+    """Model for login requests."""
+    username: str = Field(..., description="Admin username")
+    password: str = Field(..., description="Admin password")
+
+
+class LoginResponse(BaseModel):
+    """Model for login responses."""
+    access_token: str = Field(..., description="JWT access token")
+    token_type: str = Field("bearer", description="Token type")
+    expires_in: int = Field(..., description="Token expiration time in seconds")
+    admin: AdminBase = Field(..., description="Admin user information")

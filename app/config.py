@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     schedule_time: str = Field("06:00", env="SCHEDULE_TIME")
     timezone: str = Field("Europe/London", env="TIMEZONE")
 
+    # Authentication Configuration
+    jwt_secret_key: str = Field("your-super-secret-jwt-key-change-in-production", env="JWT_SECRET_KEY")
+    jwt_algorithm: str = Field("HS256", env="JWT_ALGORITHM")
+    jwt_access_token_expire_minutes: int = Field(1440, env="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")  # 24 hours
+
     # Environment
     environment: str = Field("development", env="ENVIRONMENT")
     log_level: str = Field("INFO", env="LOG_LEVEL")
