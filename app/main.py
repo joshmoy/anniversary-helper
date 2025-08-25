@@ -156,7 +156,7 @@ async def login(login_data: LoginRequest):
         
         # Create access token
         token_data = {
-            "sub": admin.id,
+            "sub": str(admin.id),  # JWT sub must be a string
             "username": admin.username,
             "type": "access"
         }
@@ -209,8 +209,8 @@ async def get_current_admin_info(current_admin: Dict[str, Any] = Depends(get_cur
 
 
 @app.get("/people", response_model=List[Person])
-async def get_all_people():
-    """Get all people in the database."""
+async def get_all_people(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Get all people in the database. Requires authentication."""
     try:
         return await db_manager.get_all_people()
     except Exception as e:
@@ -219,8 +219,8 @@ async def get_all_people():
 
 
 @app.get("/people/{person_id}", response_model=Person)
-async def get_person(person_id: int):
-    """Get a specific person by ID."""
+async def get_person(person_id: int, current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Get a specific person by ID. Requires authentication."""
     try:
         person = await db_manager.get_person_by_id(person_id)
         if not person:
@@ -234,8 +234,8 @@ async def get_person(person_id: int):
 
 
 @app.put("/people/{person_id}", response_model=Person)
-async def update_person(person_id: int, person_data: PersonUpdate):
-    """Update a person's information."""
+async def update_person(person_id: int, person_data: PersonUpdate, current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Update a person's information. Requires authentication."""
     try:
         updated_person = await db_manager.update_person(person_id, person_data)
         if not updated_person:
@@ -249,8 +249,8 @@ async def update_person(person_id: int, person_data: PersonUpdate):
 
 
 @app.delete("/people/{person_id}")
-async def delete_person(person_id: int):
-    """Delete a person (soft delete by setting active=False)."""
+async def delete_person(person_id: int, current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Delete a person (soft delete by setting active=False). Requires authentication."""
     try:
         success = await db_manager.delete_person(person_id)
         if not success:
@@ -264,8 +264,8 @@ async def delete_person(person_id: int):
 
 
 @app.get("/celebrations/today", response_model=List[Person])
-async def get_todays_celebrations():
-    """Get all people with celebrations today."""
+async def get_todays_celebrations(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Get all people with celebrations today. Requires authentication."""
     try:
         return await date_manager.get_todays_celebrations()
     except Exception as e:
@@ -274,8 +274,8 @@ async def get_todays_celebrations():
 
 
 @app.get("/celebrations/{date_str}", response_model=List[Person])
-async def get_celebrations_for_date(date_str: str):
-    """Get all people with celebrations on a specific date (MM-DD format)."""
+async def get_celebrations_for_date(date_str: str, current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Get all people with celebrations on a specific date (MM-DD format). Requires authentication."""
     try:
         # Validate date format
         if len(date_str) != 5 or date_str[2] != '-':
@@ -290,8 +290,8 @@ async def get_celebrations_for_date(date_str: str):
 
 
 @app.post("/upload-csv")
-async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    """Upload and process a CSV file with celebration data using Supabase Storage."""
+async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(...), current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Upload and process a CSV file with celebration data using Supabase Storage. Requires authentication."""
     try:
         # Validate file type
         if not file.filename.endswith('.csv'):
@@ -338,8 +338,8 @@ async def process_csv_background(file_path: str):
 
 
 @app.post("/send-celebrations")
-async def send_daily_celebrations():
-    """Manually trigger sending celebration messages for today."""
+async def send_daily_celebrations(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Manually trigger sending celebration messages for today. Requires authentication."""
     try:
         result = await whatsapp_messenger.send_daily_celebrations()
         return result
@@ -349,8 +349,8 @@ async def send_daily_celebrations():
 
 
 @app.get("/messages")
-async def get_message_logs():
-    """Get all message logs with delivery status."""
+async def get_message_logs(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Get all message logs with delivery status. Requires authentication."""
     try:
         messages = await db_manager.get_all_message_logs()
         return messages
@@ -360,8 +360,8 @@ async def get_message_logs():
 
 
 @app.get("/messages/{message_id}")
-async def get_message_log(message_id: int):
-    """Get a specific message log by ID."""
+async def get_message_log(message_id: int, current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Get a specific message log by ID. Requires authentication."""
     try:
         message = await db_manager.get_message_log_by_id(message_id)
         if not message:
@@ -375,8 +375,8 @@ async def get_message_log(message_id: int):
 
 
 @app.get("/csv-uploads")
-async def get_csv_upload_history():
-    """Get the history of all CSV uploads."""
+async def get_csv_upload_history(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Get the history of all CSV uploads. Requires authentication."""
     try:
         uploads = await db_manager.get_csv_upload_history()
         return uploads
@@ -386,8 +386,8 @@ async def get_csv_upload_history():
 
 
 @app.get("/csv-files")
-async def list_csv_files():
-    """List all CSV files in Supabase Storage."""
+async def list_csv_files(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """List all CSV files in Supabase Storage. Requires authentication."""
     try:
         files = await storage_manager.list_csv_files()
         return {"files": files}
@@ -397,8 +397,8 @@ async def list_csv_files():
 
 
 @app.delete("/csv-files/{file_path:path}")
-async def delete_csv_file(file_path: str):
-    """Delete a CSV file from Supabase Storage."""
+async def delete_csv_file(file_path: str, current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Delete a CSV file from Supabase Storage. Requires authentication."""
     try:
         success = await storage_manager.delete_csv_file(file_path)
         if not success:
@@ -412,8 +412,8 @@ async def delete_csv_file(file_path: str):
 
 
 @app.get("/scheduler/status")
-async def get_scheduler_status():
-    """Get the current status of the celebration scheduler."""
+async def get_scheduler_status(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Get the current status of the celebration scheduler. Requires authentication."""
     try:
         return celebration_scheduler.get_status()
     except Exception as e:
@@ -422,8 +422,8 @@ async def get_scheduler_status():
 
 
 @app.post("/scheduler/manual-run")
-async def manual_scheduler_run():
-    """Manually trigger the celebration scheduler (for testing)."""
+async def manual_scheduler_run(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Manually trigger the celebration scheduler (for testing). Requires authentication."""
     try:
         await celebration_scheduler.run_manual_check()
         return {"message": "Manual celebration check completed"}

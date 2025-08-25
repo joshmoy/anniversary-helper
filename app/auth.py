@@ -130,11 +130,20 @@ async def get_current_admin(credentials: HTTPAuthorizationCredentials = Depends(
         payload = auth_service.verify_token(credentials.credentials)
         
         # Extract admin info from token
-        admin_id: int = payload.get("sub")
-        if admin_id is None:
+        admin_id_str: str = payload.get("sub")
+        if admin_id_str is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token missing admin ID",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        try:
+            admin_id = int(admin_id_str)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid admin ID in token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
