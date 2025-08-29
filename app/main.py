@@ -33,6 +33,7 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Church Anniversary & Birthday Helper...")
 
+
     try:
         # Initialize database
         await db_manager.initialize_tables()
@@ -70,6 +71,7 @@ allowed_origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin for origin in allowed_origins if origin], 
+    allow_origin_regex=r"^https://[a-z0-9-]+\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
