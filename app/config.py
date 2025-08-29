@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     jwt_secret_key: str = Field("your-super-secret-jwt-key-change-in-production", env="JWT_SECRET_KEY")
     jwt_algorithm: str = Field("HS256", env="JWT_ALGORITHM")
     jwt_access_token_expire_minutes: int = Field(1440, env="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")  # 24 hours
+    
+    cron_secret: str = Field("your-super-secret", env="CRON_SECRET")
+    job_url: str = Field("job-url", env="JOB_URL")
+    frontend_url: str = Field("http://localhost:3000", env="CLIENT_URL")
 
     # Environment
     environment: str = Field("development", env="ENVIRONMENT")

@@ -61,21 +61,18 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+allowed_origins = [
+    settings.job_url,
+    settings.frontend_url,
+]
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # Next.js frontend
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",  # Alternative port
-        "http://127.0.0.1:3001",
-        "http://127.0.0.1:3002",
-        "http://localhost:3002",  # Alternative port
-        
-    ],
+    allow_origins=[origin for origin in allowed_origins if origin], 
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all methods (GET, POST, PUT, DELETE, etc.)
-    allow_headers=["*"],  # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
