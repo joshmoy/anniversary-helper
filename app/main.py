@@ -7,7 +7,7 @@ from datetime import date
 from typing import List, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, status, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, status, Depends, Header
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -335,6 +335,14 @@ async def process_csv_background(file_path: str):
         logger.info(f"CSV processing completed: {result}")
     except Exception as e:
         logger.error(f"Error processing CSV in background: {e}")
+        
+
+@app.post("/scheduler/cron-hook")
+async def cron_hook(x_cron_secret: str | None = Header(None)):
+    if x_cron_secret != settings.cron_secret:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    await celebration_scheduler.run_manual_check()
+    return {"message": "ok"}
 
 
 @app.post("/send-celebrations")
