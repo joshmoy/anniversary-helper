@@ -5,16 +5,13 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt
 from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
-
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # JWT security scheme
 security = HTTPBearer()
@@ -27,7 +24,10 @@ class AuthenticationService:
     def verify_password(plain_password: str, hashed_password: str) -> bool:
         """Verify a plaintext password against its hash."""
         try:
-            return pwd_context.verify(plain_password, hashed_password)
+            return bcrypt.checkpw(
+                plain_password.encode("utf-8"),
+                hashed_password.encode("utf-8"),
+            )
         except Exception as e:
             logger.error(f"Error verifying password: {e}")
             return False
@@ -36,12 +36,15 @@ class AuthenticationService:
     def get_password_hash(password: str) -> str:
         """Hash a plaintext password."""
         try:
-            return pwd_context.hash(password)
+            return bcrypt.hashpw(
+                password.encode("utf-8"),
+                bcrypt.gensalt(),
+            ).decode("utf-8")
         except Exception as e:
             logger.error(f"Error hashing password: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error processing password"
+                detail="Error processing password",
             )
 
     @staticmethod

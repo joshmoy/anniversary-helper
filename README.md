@@ -90,6 +90,43 @@ All configuration is done through environment variables:
 - `WHATSAPP_TO`: Target WhatsApp group number
 - `SCHEDULE_TIME`: Daily check time (default: "09:00")
 
+## Auth Hashing without Passlib
+
+This application uses native `bcrypt` for password hashing instead of Passlib. This provides better compatibility and eliminates dependency issues.
+
+### Migration from Passlib
+
+If you're upgrading from a version that used Passlib:
+
+1. **Uninstall Passlib:**
+
+   ```bash
+   pip uninstall -y passlib
+   ```
+
+2. **Install updated dependencies:**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Run tests to verify:**
+
+   ```bash
+   pytest -q
+   ```
+
+4. **Local smoke test:**
+   - Start the server: `python run.py`
+   - Test login endpoint: `POST /auth/login`
+
+### Password Hashing Details
+
+- Uses native `bcrypt==4.1.3` for password hashing
+- Existing bcrypt hashes (e.g., `$2b$...`, `$2a$...`, `$2y$...`) continue to work
+- No database schema changes required
+- Compatible with Python 3.12 on Railway
+
 ## Deployment
 
 This app is designed to deploy easily on Railway's free tier. See `railway.json` for deployment configuration.
