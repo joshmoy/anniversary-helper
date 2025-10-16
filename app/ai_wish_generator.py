@@ -38,51 +38,16 @@ class AIWishGenerator:
             except Exception as e:
                 logger.warning(f"Failed to initialize OpenAI client: {e}")
 
-    def get_anniversary_bible_verses(self) -> List[Dict[str, str]]:
-        """Get Bible verses suitable for anniversary celebrations."""
+    def get_inspirational_lines(self) -> List[str]:
+        """Short inspirational lines you can optionally append to a wish."""
         return [
-            {
-                "verse": "Love is patient, love is kind. It does not envy, it does not boast, it is not proud.",
-                "reference": "1 Corinthians 13:4"
-            },
-            {
-                "verse": "Two are better than one, because they have a good return for their labor.",
-                "reference": "Ecclesiastes 4:9"
-            },
-            {
-                "verse": "Therefore what God has joined together, let no one separate.",
-                "reference": "Mark 10:9"
-            },
-            {
-                "verse": "Above all, love each other deeply, because love covers over a multitude of sins.",
-                "reference": "1 Peter 4:8"
-            },
-            {
-                "verse": "And now these three remain: faith, hope and love. But the greatest of these is love.",
-                "reference": "1 Corinthians 13:13"
-            },
-            {
-                "verse": "Many waters cannot quench love; rivers cannot sweep it away.",
-                "reference": "Song of Songs 8:7"
-            },
-            {
-                "verse": "Let love and faithfulness never leave you; bind them around your neck, write them on the tablet of your heart.",
-                "reference": "Proverbs 3:3"
-            },
-            {
-                "verse": "Be completely humble and gentle; be patient, bearing with one another in love.",
-                "reference": "Ephesians 4:2"
-            },
-            {
-                "verse": "The Lord bless you and keep you; the Lord make his face shine on you and be gracious to you.",
-                "reference": "Numbers 6:24-25"
-            },
-            {
-                "verse": "For I know the plans I have for you, declares the Lord, plans to prosper you and not to harm you, to give you hope and a future.",
-                "reference": "Jeremiah 29:11"
-            }
+        "Here’s to many more moments worth celebrating.",
+        "Wishing you continued joy, growth, and laughter together.",
+        "May the years ahead be full of memorable adventures.",
+        "Cheers to milestones behind you and the ones still to come.",
+        "Your dedication and care for each other truly shine.",
         ]
-
+    
     def get_relationship_context(self, relationship: str) -> str:
         """Get contextual information based on relationship type."""
         # Convert to lowercase for case-insensitive matching
@@ -167,7 +132,7 @@ class AIWishGenerator:
             
             # Build the prompt
             prompt_parts = [
-                f"Generate a Christian {anniversary_context} wish for {request.name}.",
+                f"Generate a {anniversary_context} wish for {request.name}.",
                 f"Write this {relationship_context}.",
                 f"Tone: {tone_instructions}",
             ]
@@ -177,13 +142,10 @@ class AIWishGenerator:
             
             prompt_parts.extend([
                 "The wish should:",
-                "- Be heartfelt and godly",
-                "- Include a relevant Bible verse appropriate for the occasion",
-                "- Be appropriate for a Christian celebration",
+                "- Be heartfelt and genuine",
+                "- Be appropriate for the occasion",
                 "- Be 2-4 sentences long",
-                "- Express God's blessings and love",
-                "",
-                "Format: [Wish Message] - [Bible Verse] ([Reference])"
+                "Format: [Wish Message]"
             ])
             
             prompt = "\n".join(prompt_parts)
@@ -193,7 +155,7 @@ class AIWishGenerator:
                 messages=[
                     {
                         "role": "system", 
-                        "content": "You are a Christian pastor writing personalized anniversary wishes. Your messages should be warm, godly, and include appropriate Bible verses. Return ONLY the wish content without any introductory or closing text."
+                        "content": "You write personalized anniversary wishes. Your messages should be warm and appropriate for the occasion. Return ONLY the wish content without any introductory or closing text."
                     },
                     {"role": "user", "content": prompt}
                 ],
@@ -220,7 +182,7 @@ class AIWishGenerator:
             
             # Build the prompt
             prompt_parts = [
-                f"Generate a Christian {anniversary_context} wish for {request.name}.",
+                f"Generate a {anniversary_context} wish for {request.name}.",
                 f"Write this {relationship_context}.",
                 f"Tone: {tone_instructions}",
             ]
@@ -229,8 +191,8 @@ class AIWishGenerator:
                 prompt_parts.append(f"Additional context: {request.context}")
             
             prompt_parts.extend([
-                "The wish should be heartfelt, godly, include a Bible verse, and be appropriate for a Christian celebration.",
-                "Keep it to 2-4 sentences. Format: [Wish Message] - [Bible Verse] ([Reference])"
+                "The wish should be heartfelt, and be appropriate for the occasion.",
+                "Keep it to 2-4 sentences. Format: [Wish Message]"
             ])
             
             prompt = "\n".join(prompt_parts)
@@ -240,7 +202,7 @@ class AIWishGenerator:
                 messages=[
                     {
                         "role": "system", 
-                        "content": "You are a Christian pastor writing personalized anniversary wishes. Return ONLY the wish content without any introductory or closing text."
+                        "content": "You write personalized anniversary wishes. Return ONLY the wish content without any introductory or closing text."
                     },
                     {"role": "user", "content": prompt}
                 ],
@@ -260,70 +222,55 @@ class AIWishGenerator:
         relationship_context = self.get_relationship_context(request.relationship)
         anniversary_context = self.get_anniversary_type_context(request.anniversary_type)
         
-        # Select a random Bible verse
-        bible_verses = self.get_anniversary_bible_verses()
-        selected_verse = random.choice(bible_verses)
-
         # Generate base message based on anniversary type
+        # Build a simple, tasteful, non‑religious message per type
         if request.anniversary_type == AnniversaryType.BIRTHDAY:
-            message = f"🎂 Happy Birthday, {request.name}! May God's love and grace shine upon you today and always."
+            base = f"🎂 Happy Birthday, {request.name}! Wishing you a year filled with good health, happiness, and moments that make you smile."
         elif request.anniversary_type == AnniversaryType.PROMOTION:
-            message = f"🎉 Congratulations on your promotion, {request.name}! May God continue to bless your career and use your talents for His glory."
+            base = f"🎉 Congratulations on your promotion, {request.name}! Your hard work and dedication truly stand out—here's to new challenges and continued success."
         elif request.anniversary_type == AnniversaryType.RETIREMENT:
-            message = f"🎊 Congratulations on your retirement, {request.name}! May God bless this new chapter of your life with peace, joy, and new opportunities to serve Him."
+            base = f"🎊 Congratulations on your retirement, {request.name}! May this new chapter bring you relaxation, discovery, and time for everything you enjoy."
+        elif request.anniversary_type in {AnniversaryType.WEDDING_ANNIVERSARY, AnniversaryType.RELATIONSHIP, AnniversaryType.FRIENDSHIP, AnniversaryType.MILESTONE, AnniversaryType.CUSTOM}:
+            base = f"🎉 Happy {anniversary_context.title()}, {request.name}! Cheers to all the moments ahead."
+        elif request.anniversary_type == AnniversaryType.WORK_ANNIVERSARY:
+            base = f"🎉 Happy work anniversary, {request.name}! Thank you for your contributions and collaboration—here's to another year of impact."
         else:
-            # For anniversaries, work anniversaries, etc.
-            message = f"🎉 Happy {anniversary_context.title()}, {request.name}! May God's love and grace continue to strengthen your bond."
+            base = f"🎉 Happy {anniversary_context.title()}, {request.name}! Wishing you continued joy and meaningful moments."
 
-        # Add relationship-specific touch
-        relationship_lower = request.relationship.lower().strip()
-        if relationship_lower in ["spouse", "husband", "wife", "partner"]:
-            message = message.replace("your journey together", "your beautiful marriage")
-        elif relationship_lower in ["parent", "mother", "father"]:
-            message = message.replace("your bond", "your loving relationship")
-        elif relationship_lower in ["friend"]:
-            message = message.replace("your bond", "your wonderful friendship")
-        elif relationship_lower in ["colleague", "coworker", "boss", "manager"]:
-            message = message.replace("your bond", "your professional relationship")
+        # Add a random inspirational line
+        inspirational_line = random.choice(self.get_inspirational_lines())
+        message = f"{base} {inspirational_line}"
 
         # Add context if provided
         if request.context:
             message += f" {request.context}"
 
-        return f"{message} - {selected_verse['verse']} ({selected_verse['reference']})"
+        return message
 
     def _clean_ai_message(self, message: str) -> str:
-        """Clean AI-generated message by removing unwanted introductory and closing text."""
-        # Remove common introductory phrases
+        """Clean AI‑generated message by removing boilerplate."""
         intro_patterns = [
-            r"Here is a warm, Christian anniversary wish for [^:]+:",
-            r"Here's a warm, Christian anniversary wish for [^:]+:",
-            r"Here is a Christian anniversary wish for [^:]+:",
-            r"Here's a Christian anniversary wish for [^:]+:",
-            r"Here is a personalized anniversary wish for [^:]+:",
-            r"Here's a personalized anniversary wish for [^:]+:",
+        r"here(?:'| i)s (?:a|one) (?:warm|personal(?:ized)?) anniversary wish for [^:]+:\s*",
+        r"here(?:'| i)s (?:a|one) (?:non\-religious )?anniversary wish:\s*",
         ]
-
+        
         for pattern in intro_patterns:
-            message = re.sub(pattern, "", message, flags=re.IGNORECASE)
+            message = re.sub(pattern, "", message, flags=re.IGNORECASE).strip()
 
-        # Remove common closing phrases
+
         closing_patterns = [
-            r"May God bless you both\.",
-            r"God bless\.",
-            r"Blessings\.",
-            r"Congratulations again\.",
+        r"congratulations again\.?$",
+        r"best wishes\.?$",
+        r"cheers\.?$",
         ]
-
         for pattern in closing_patterns:
-            message = re.sub(pattern, "", message, flags=re.IGNORECASE)
+            message = re.sub(pattern, "", message, flags=re.IGNORECASE).strip()
 
-        # Clean up extra whitespace and newlines
-        message = re.sub(r'\n+', ' ', message)
-        message = re.sub(r'\s+', ' ', message)
-        message = message.strip()
 
-        return message
+        message = re.sub(r"\n+", " ", message)
+        message = re.sub(r"\s+", " ", message)
+        
+        return message.strip()
 
     async def generate_anniversary_wish(self, request: AnniversaryWishRequest) -> str:
         """Generate an anniversary wish for the given request."""
@@ -349,7 +296,6 @@ class AIWishGenerator:
             anniversary_type=original_request.anniversary_type,
             relationship=original_request.relationship,
             context=original_request.context + f" {additional_context}" if original_request.context and additional_context else additional_context or original_request.context,
-            years_together=original_request.years_together
         )
 
         return await self.generate_anniversary_wish(updated_request)

@@ -14,7 +14,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 # JWT security scheme
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
 class AuthenticationService:

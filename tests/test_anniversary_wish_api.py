@@ -134,8 +134,10 @@ class TestRateLimitService:
     @pytest.mark.asyncio
     async def test_check_rate_limit_new_ip(self):
         """Test rate limit check for new IP address."""
-        with patch.object(rate_limit_service, 'get_rate_limit_record', return_value=None), \
-             patch.object(rate_limit_service, 'create_rate_limit_record', return_value={}):
+        from app.database import db_manager
+        
+        with patch.object(db_manager, 'get_rate_limit_record', return_value=None), \
+             patch.object(db_manager, 'create_rate_limit_record', return_value={}):
             
             is_allowed, rate_info = await rate_limit_service.check_rate_limit("192.168.1.1")
             
@@ -152,8 +154,10 @@ class TestRateLimitService:
             "last_request_time": datetime.now().isoformat()
         }
         
-        with patch.object(rate_limit_service, 'get_rate_limit_record', return_value=mock_record), \
-             patch.object(rate_limit_service, 'update_rate_limit_record', return_value=True):
+        from app.database import db_manager
+        
+        with patch.object(db_manager, 'get_rate_limit_record', return_value=mock_record), \
+             patch.object(db_manager, 'update_rate_limit_record', return_value=True):
             
             is_allowed, rate_info = await rate_limit_service.check_rate_limit("192.168.1.1")
             
@@ -170,7 +174,9 @@ class TestRateLimitService:
             "last_request_time": datetime.now().isoformat()
         }
         
-        with patch.object(rate_limit_service, 'get_rate_limit_record', return_value=mock_record):
+        from app.database import db_manager
+        
+        with patch.object(db_manager, 'get_rate_limit_record', return_value=mock_record):
             
             is_allowed, rate_info = await rate_limit_service.check_rate_limit("192.168.1.1")
             
@@ -235,7 +241,8 @@ class TestAIWishGenerator:
         
         assert "John and Sarah" in wish
         assert "Wedding Anniversary" in wish
-        assert "(" in wish and ")" in wish  # Should contain Bible verse reference
+        # Should contain inspirational content but not Bible verses
+        assert len(wish) > 50  # Should be a substantial message
 
     def test_clean_ai_message(self):
         """Test AI message cleaning."""
@@ -244,12 +251,12 @@ class TestAIWishGenerator:
         generator = AIWishGenerator()
         
         # Test message with unwanted introductory text
-        dirty_message = "Here is a warm, Christian anniversary wish for John and Sarah: Happy Anniversary! - Love is patient (1 Corinthians 13:4)"
+        dirty_message = "Here is a warm anniversary wish for John and Sarah: Happy Anniversary! Here's to many more moments worth celebrating."
         clean_message = generator._clean_ai_message(dirty_message)
         
         assert "Here is a warm" not in clean_message
         assert "Happy Anniversary!" in clean_message
-        assert "Love is patient" in clean_message
+        assert "moments worth celebrating" in clean_message
 
 
 if __name__ == "__main__":

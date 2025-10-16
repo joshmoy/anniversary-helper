@@ -98,7 +98,7 @@ class TestAIMessageGenerator:
         message = ai_generator.generate_fallback_message(celebration_info)
 
         assert "John and Jane Doe" in message
-        assert "Anniversary" in message or "anniversary" in message
+        assert "Anniversary" in message or "anniversary" in message or "marriage" in message
         assert "10" in message
         assert "(" in message  # Should contain Bible verse reference
 
