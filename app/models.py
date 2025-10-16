@@ -115,3 +115,64 @@ class LoginResponse(BaseModel):
     token_type: str = Field("bearer", description="Token type")
     expires_in: int = Field(..., description="Token expiration time in seconds")
     admin: AdminBase = Field(..., description="Admin user information")
+
+
+# Rate Limiting Models
+class RateLimitRecord(BaseModel):
+    """Model for tracking API rate limits."""
+    id: int
+    ip_address: str = Field(..., description="Client IP address")
+    request_count: int = Field(..., description="Number of requests in current window")
+    window_start: datetime = Field(..., description="Start time of current rate limit window")
+    last_request_time: datetime = Field(..., description="Timestamp of last request")
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Anniversary Wish API Models
+class AnniversaryType(str, Enum):
+    """Types of anniversaries for wish generation."""
+    BIRTHDAY = "birthday"
+    WORK_ANNIVERSARY = "work-anniversary"
+    WEDDING_ANNIVERSARY = "wedding-anniversary"
+    PROMOTION = "promotion"
+    RETIREMENT = "retirement"
+    FRIENDSHIP = "friendship"
+    RELATIONSHIP = "relationship"
+    MILESTONE = "milestone"
+    CUSTOM = "custom"
+
+
+class ToneType(str, Enum):
+    """Tone options for wish generation."""
+    PROFESSIONAL = "professional"
+    FRIENDLY = "friendly"
+    WARM = "warm"
+    HUMOROUS = "humorous"
+    FORMAL = "formal"
+
+
+class AnniversaryWishRequest(BaseModel):
+    """Model for anniversary wish generation requests."""
+    name: str = Field(..., description="Name of the person celebrating the anniversary", min_length=1, max_length=100)
+    anniversary_type: AnniversaryType = Field(..., description="Type of anniversary")
+    relationship: str = Field(..., description="Your relationship to the person (e.g., 'friend', 'colleague', 'spouse', 'mentor')", min_length=1, max_length=50)
+    tone: ToneType = Field(ToneType.WARM, description="Tone of the wish message")
+    context: Optional[str] = Field(None, description="Additional context for personalization", max_length=500)
+
+
+class AnniversaryWishResponse(BaseModel):
+    """Model for anniversary wish generation responses."""
+    generated_wish: str = Field(..., description="The AI-generated anniversary wish")
+    request_id: str = Field(..., description="Unique identifier for this request")
+    remaining_requests: int = Field(..., description="Number of requests remaining in current window")
+    window_reset_time: Optional[datetime] = Field(None, description="When the rate limit window resets")
+
+
+class RegenerateWishRequest(BaseModel):
+    """Model for regenerating anniversary wishes."""
+    request_id: str = Field(..., description="ID of the original request to regenerate")
+    additional_context: Optional[str] = Field(None, description="Additional context for regeneration", max_length=500)

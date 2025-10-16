@@ -2,11 +2,11 @@
 Database connection and operations using Supabase.
 """
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import List, Optional, Dict, Any
 from supabase import create_client, Client
 from app.config import settings
-from app.models import Person, PersonCreate, PersonUpdate, MessageLog, CSVUpload, Admin, AdminCreate
+from app.models import Person, PersonCreate, PersonUpdate, MessageLog, CSVUpload, Admin, AdminCreate, RateLimitRecord
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +90,26 @@ class DatabaseManager:
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                 last_login TIMESTAMP WITH TIME ZONE
             );
+            """
+
+            # Create rate_limiting table
+            rate_limiting_table = """
+            CREATE TABLE IF NOT EXISTS rate_limiting (
+                id SERIAL PRIMARY KEY,
+                ip_address VARCHAR(45) NOT NULL,
+                request_count INTEGER DEFAULT 1,
+                window_start TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                last_request_time TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                UNIQUE(ip_address)
+            );
+            """
+
+            # Create index for efficient lookups
+            rate_limiting_index = """
+            CREATE INDEX IF NOT EXISTS idx_rate_limiting_ip_address ON rate_limiting(ip_address);
+            CREATE INDEX IF NOT EXISTS idx_rate_limiting_window_start ON rate_limiting(window_start);
             """
 
             # Execute table creation (Note: Supabase handles this via SQL editor)
@@ -443,6 +463,102 @@ class DatabaseManager:
 
         except Exception as e:
             logger.error(f"Error updating admin last login {admin_id}: {e}")
+            raise
+
+    # Rate Limiting Methods
+    async def get_rate_limit_record(self, ip_address: str) -> Optional[Dict[str, Any]]:
+        """Get rate limit record for an IP address."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            result = self.supabase.table("rate_limiting").select("*").eq("ip_address", ip_address).execute()
+
+            if result.data and len(result.data) > 0:
+                return result.data[0]
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting rate limit record for IP {ip_address}: {e}")
+            raise
+
+    async def create_rate_limit_record(self, ip_address: str) -> Dict[str, Any]:
+        """Create a new rate limit record for an IP address."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            now = datetime.now().isoformat()
+            data = {
+                "ip_address": ip_address,
+                "request_count": 1,
+                "window_start": now,
+                "last_request_time": now
+            }
+
+            result = self.supabase.table("rate_limiting").insert(data).execute()
+
+            if result.data:
+                return result.data[0]
+            else:
+                raise Exception("Failed to create rate limit record")
+
+        except Exception as e:
+            logger.error(f"Error creating rate limit record for IP {ip_address}: {e}")
+            raise
+
+    async def update_rate_limit_record(self, ip_address: str, request_count: int, window_start: datetime, last_request_time: datetime) -> bool:
+        """Update an existing rate limit record."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            result = self.supabase.table("rate_limiting").update({
+                "request_count": request_count,
+                "window_start": window_start.isoformat(),
+                "last_request_time": last_request_time.isoformat(),
+                "updated_at": datetime.now().isoformat()
+            }).eq("ip_address", ip_address).execute()
+
+            return result.data and len(result.data) > 0
+
+        except Exception as e:
+            logger.error(f"Error updating rate limit record for IP {ip_address}: {e}")
+            raise
+
+    async def reset_rate_limit_window(self, ip_address: str) -> bool:
+        """Reset the rate limit window for an IP address."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            now = datetime.now()
+            result = self.supabase.table("rate_limiting").update({
+                "request_count": 1,
+                "window_start": now.isoformat(),
+                "last_request_time": now.isoformat(),
+                "updated_at": now.isoformat()
+            }).eq("ip_address", ip_address).execute()
+
+            return result.data and len(result.data) > 0
+
+        except Exception as e:
+            logger.error(f"Error resetting rate limit window for IP {ip_address}: {e}")
+            raise
+
+    async def cleanup_expired_rate_limits(self, hours_old: int = 24) -> int:
+        """Clean up rate limit records older than specified hours."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            cutoff_time = datetime.now() - timedelta(hours=hours_old)
+            result = self.supabase.table("rate_limiting").delete().lt("created_at", cutoff_time.isoformat()).execute()
+
+            return len(result.data) if result.data else 0
+
+        except Exception as e:
+            logger.error(f"Error cleaning up expired rate limits: {e}")
             raise
 
 

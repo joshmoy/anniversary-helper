@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     job_url: str = Field("job-url", env="JOB_URL")
     frontend_url: str = Field("http://localhost:3000", env="CLIENT_URL")
 
+    # Rate Limiting Configuration
+    rate_limit_max_requests: int = Field(3, env="RATE_LIMIT_MAX_REQUESTS")
+    rate_limit_window_hours: int = Field(3, env="RATE_LIMIT_WINDOW_HOURS")
+
     # Environment
     environment: str = Field("development", env="ENVIRONMENT")
     log_level: str = Field("INFO", env="LOG_LEVEL")

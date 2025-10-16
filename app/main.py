@@ -2,22 +2,29 @@
 Main FastAPI application for the Church Anniversary & Birthday Helper.
 """
 import logging
+import uuid
 from contextlib import asynccontextmanager
 from datetime import date
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, status, Depends, Header
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, status, Depends, Header, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from app.config import settings
 from app.database import db_manager
-from app.models import Person, PersonUpdate, LoginRequest, LoginResponse, AdminBase
+from app.models import (
+    Person, PersonUpdate, LoginRequest, LoginResponse, AdminBase,
+    AnniversaryWishRequest, AnniversaryWishResponse, RegenerateWishRequest,
+    AnniversaryType, ToneType
+)
 from app.services import csv_manager, date_manager, whatsapp_messenger, storage_manager
 from app.scheduler import celebration_scheduler
-from app.auth import auth_service, get_current_admin
+from app.auth import auth_service, get_current_admin, get_optional_current_admin
+from app.rate_limiter import rate_limit_service
+from app.ai_wish_generator import ai_wish_generator
 
 # Configure logging
 logging.basicConfig(
@@ -57,9 +64,43 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app
 app = FastAPI(
     title="Church Anniversary & Birthday Helper",
-    description="Automated system for sending Christian celebration messages",
+    description="""
+    Automated system for sending Christian celebration messages and generating personalized anniversary wishes.
+    
+    ## Features
+    
+    * **Automated Celebrations**: Daily automated checks for birthdays and anniversaries
+    * **CSV Data Management**: Easy monthly data uploads via CSV files
+    * **AI-Generated Messages**: Creates personalized Christian messages with Bible verses
+    * **WhatsApp Integration**: Sends messages directly to your church WhatsApp group
+    * **Anniversary Wish API**: Generate personalized AI-powered anniversary wishes
+    * **Rate Limiting**: Protects API endpoints with configurable rate limits
+    
+    ## Anniversary Wish API
+    
+    The Anniversary Wish API allows users to generate personalized, AI-powered anniversary wishes:
+    
+    * **Public Access**: Non-authenticated users can generate wishes (with rate limiting)
+    * **Rate Limiting**: 3 requests per 3 hours per IP address for non-authenticated users
+    * **AI-Powered**: Uses Groq/OpenAI to generate contextually appropriate wishes
+    * **Christian-Themed**: All wishes include appropriate Bible verses
+    * **Personalized**: Considers relationship type, anniversary type, and custom context
+    
+    ## Authentication
+    
+    * Admin endpoints require JWT authentication
+    * Anniversary wish endpoints work without authentication (with rate limiting)
+    * Authenticated users have unlimited access to wish generation
+    """,
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    contact={
+        "name": "Church Anniversary Helper Support",
+        "email": "support@anniversaryhelper.com",
+    },
+    license_info={
+        "name": "MIT",
+    },
 )
 
 allowed_origins = [
@@ -437,6 +478,207 @@ async def manual_scheduler_run(current_admin: Dict[str, Any] = Depends(get_curre
     except Exception as e:
         logger.error(f"Error in manual scheduler run: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Anniversary Wish API Endpoints
+@app.post("/api/anniversary-wish", response_model=AnniversaryWishResponse)
+async def generate_anniversary_wish(
+    request: AnniversaryWishRequest,
+    http_request: Request,
+    current_admin: Optional[Dict[str, Any]] = Depends(get_optional_current_admin)
+):
+    """
+    Generate a personalized AI-powered anniversary wish.
+    
+    This endpoint allows both authenticated and non-authenticated users to generate
+    anniversary wishes. Non-authenticated users are subject to rate limiting.
+    
+    ## Rate Limiting
+    - **Non-authenticated users**: 3 requests per 3 hours per IP address
+    - **Authenticated users**: Unlimited requests
+    
+    ## Example Request
+    ```json
+    {
+        "name": "John and Sarah",
+        "anniversary_type": "wedding-anniversary",
+        "relationship": "friend",
+        "tone": "warm",
+        "context": "They just moved to a new city and are starting a new chapter"
+    }
+    ```
+    
+    ## Relationship Examples
+    You can use any relationship description, such as:
+    - "friend", "best friend", "close friend"
+    - "colleague", "coworker", "boss", "manager"
+    - "spouse", "husband", "wife", "partner"
+    - "parent", "mother", "father"
+    - "child", "son", "daughter"
+    - "sibling", "brother", "sister"
+    - "mentor", "teacher", "pastor", "minister"
+    - "neighbor", "family member", "relative"
+    - Or any custom relationship description
+    
+    ## Example Response
+    ```json
+    {
+        "generated_wish": "🎉 Happy 5th Wedding Anniversary, John and Sarah! As your friend, I'm so grateful to celebrate this beautiful milestone with you. May God continue to bless your marriage as you begin this new chapter in your new city. - Love is patient, love is kind. It does not envy, it does not boast, it is not proud. (1 Corinthians 13:4)",
+        "request_id": "123e4567-e89b-12d3-a456-426614174000",
+        "remaining_requests": 2,
+        "window_reset_time": "2024-01-15T18:00:00Z"
+    }
+    ```
+    """
+    try:
+        # Extract IP address for rate limiting
+        ip_address = rate_limit_service.extract_ip_address(http_request)
+        
+        # Check rate limits for non-authenticated users
+        if not current_admin:
+            is_allowed, rate_info = await rate_limit_service.check_rate_limit(ip_address)
+            
+            if not is_allowed:
+                retry_after = rate_info.get("retry_after_seconds", 3600)
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Rate limit exceeded. Please try again later.",
+                    headers={"Retry-After": str(retry_after)}
+                )
+        else:
+            # Authenticated users have unlimited access
+            rate_info = {
+                "remaining_requests": 999,
+                "window_reset_time": None,
+                "request_count": 0
+            }
+
+        # Generate the anniversary wish
+        generated_wish = await ai_wish_generator.generate_anniversary_wish(request)
+        
+        # Generate a unique request ID
+        request_id = str(uuid.uuid4())
+        
+        # Prepare response
+        response = AnniversaryWishResponse(
+            generated_wish=generated_wish,
+            request_id=request_id,
+            remaining_requests=rate_info.get("remaining_requests", 0),
+            window_reset_time=rate_info.get("window_reset_time")
+        )
+        
+        logger.info(f"Generated anniversary wish for {request.name} (IP: {ip_address}, Request ID: {request_id})")
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating anniversary wish: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate anniversary wish. Please try again later."
+        )
+
+
+@app.post("/api/anniversary-wish/regenerate", response_model=AnniversaryWishResponse)
+async def regenerate_anniversary_wish(
+    request: RegenerateWishRequest,
+    http_request: Request,
+    current_admin: Optional[Dict[str, Any]] = Depends(get_optional_current_admin)
+):
+    """
+    Regenerate an anniversary wish with additional context.
+    
+    This endpoint allows users to regenerate wishes they're not satisfied with,
+    optionally providing additional context for refinement.
+    """
+    try:
+        # Extract IP address for rate limiting
+        ip_address = rate_limit_service.extract_ip_address(http_request)
+        
+        # Check rate limits for non-authenticated users
+        if not current_admin:
+            is_allowed, rate_info = await rate_limit_service.check_rate_limit(ip_address)
+            
+            if not is_allowed:
+                retry_after = rate_info.get("retry_after_seconds", 3600)
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Rate limit exceeded. Please try again later.",
+                    headers={"Retry-After": str(retry_after)}
+                )
+        else:
+            # Authenticated users have unlimited access
+            rate_info = {
+                "remaining_requests": 999,
+                "window_reset_time": None,
+                "request_count": 0
+            }
+
+        # For now, we'll create a new request based on the regenerate request
+        # In a production system, you might want to store the original request
+        # and retrieve it using the request_id
+        
+        # Since we don't have the original request stored, we'll need to ask for the basic info again
+        # This is a limitation of the current implementation
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Regeneration feature requires storing original requests. Please use the main wish generation endpoint with additional context."
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error regenerating anniversary wish: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to regenerate anniversary wish. Please try again later."
+        )
+
+
+@app.get("/api/anniversary-wish/rate-limit-info")
+async def get_rate_limit_info(
+    http_request: Request,
+    current_admin: Optional[Dict[str, Any]] = Depends(get_optional_current_admin)
+):
+    """
+    Get current rate limit information for the requesting IP address.
+    
+    This endpoint is useful for clients to check their current rate limit status
+    before making requests. It does not count against the rate limit.
+    
+    ## Example Response
+    ```json
+    {
+        "ip_address": "192.168.1.100",
+        "is_authenticated": false,
+        "rate_limit_info": {
+            "remaining_requests": 2,
+            "window_reset_time": "2024-01-15T18:00:00Z",
+            "request_count": 1
+        }
+    }
+    ```
+    """
+    try:
+        # Extract IP address
+        ip_address = rate_limit_service.extract_ip_address(http_request)
+        
+        # Get rate limit information
+        rate_info = await rate_limit_service.get_rate_limit_info(ip_address)
+        
+        return {
+            "ip_address": ip_address,
+            "is_authenticated": current_admin is not None,
+            "rate_limit_info": rate_info
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting rate limit info: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get rate limit information."
+        )
 
 
 if __name__ == "__main__":
