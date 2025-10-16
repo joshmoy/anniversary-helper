@@ -6,7 +6,7 @@ from datetime import datetime, date, timedelta
 from typing import List, Optional, Dict, Any
 from supabase import create_client, Client
 from app.config import settings
-from app.models import Person, PersonCreate, PersonUpdate, MessageLog, CSVUpload, Admin, AdminCreate, RateLimitRecord
+from app.models import Person, PersonCreate, PersonUpdate, MessageLog, CSVUpload, Admin, AdminCreate, RateLimitRecord, AIWishAuditLog, AIWishAuditLogCreate
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +106,32 @@ class DatabaseManager:
             );
             """
 
+            # Create ai_wish_audit_logs table
+            ai_wish_audit_logs_table = """
+            CREATE TABLE IF NOT EXISTS ai_wish_audit_logs (
+                id SERIAL PRIMARY KEY,
+                request_id VARCHAR(255) NOT NULL,
+                original_request_id VARCHAR(255),
+                ip_address VARCHAR(255) NOT NULL,
+                request_data JSONB NOT NULL,
+                response_data JSONB NOT NULL,
+                ai_service_used VARCHAR(50) NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+            """
+
             # Create index for efficient lookups
             rate_limiting_index = """
             CREATE INDEX IF NOT EXISTS idx_rate_limiting_ip_address ON rate_limiting(ip_address);
             CREATE INDEX IF NOT EXISTS idx_rate_limiting_window_start ON rate_limiting(window_start);
+            """
+            
+            # Create indexes for AI wish audit logs
+            ai_wish_audit_indexes = """
+            CREATE INDEX IF NOT EXISTS idx_ai_wish_audit_request_id ON ai_wish_audit_logs(request_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_wish_audit_original_request_id ON ai_wish_audit_logs(original_request_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_wish_audit_created_at ON ai_wish_audit_logs(created_at);
+            CREATE INDEX IF NOT EXISTS idx_ai_wish_audit_ai_service ON ai_wish_audit_logs(ai_service_used);
             """
 
             # Execute table creation (Note: Supabase handles this via SQL editor)
@@ -561,7 +583,76 @@ class DatabaseManager:
             logger.error(f"Error cleaning up expired rate limits: {e}")
             raise
 
+    # AI Wish Generation Audit Trail Methods
+    async def log_ai_wish_request(self, audit_data: AIWishAuditLogCreate) -> AIWishAuditLog:
+        """Log an AI wish generation request and response."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
 
+        try:
+            data = {
+                "request_id": audit_data.request_id,
+                "original_request_id": audit_data.original_request_id,
+                "ip_address": audit_data.ip_address,
+                "request_data": audit_data.request_data,
+                "response_data": audit_data.response_data,
+                "ai_service_used": audit_data.ai_service_used
+            }
+
+            result = self.supabase.table("ai_wish_audit_logs").insert(data).execute()
+
+            if result.data:
+                return AIWishAuditLog(**result.data[0])
+            else:
+                raise Exception("Failed to create AI wish audit log")
+
+        except Exception as e:
+            logger.error(f"Error logging AI wish request: {e}")
+            raise
+
+    async def get_ai_wish_audit_logs(self, limit: int = 100, offset: int = 0) -> List[AIWishAuditLog]:
+        """Get AI wish generation audit logs."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            result = self.supabase.table("ai_wish_audit_logs").select("*").order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+            
+            return [AIWishAuditLog(**log) for log in result.data] if result.data else []
+
+        except Exception as e:
+            logger.error(f"Error getting AI wish audit logs: {e}")
+            raise
+
+    async def get_ai_wish_audit_log_by_request_id(self, request_id: str) -> Optional[AIWishAuditLog]:
+        """Get AI wish audit log by request ID."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            result = self.supabase.table("ai_wish_audit_logs").select("*").eq("request_id", request_id).execute()
+
+            if result.data and len(result.data) > 0:
+                return AIWishAuditLog(**result.data[0])
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting AI wish audit log for request {request_id}: {e}")
+            raise
+
+    async def get_ai_wish_regeneration_chain(self, original_request_id: str) -> List[AIWishAuditLog]:
+        """Get all regenerations for a given original request ID."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            result = self.supabase.table("ai_wish_audit_logs").select("*").eq("original_request_id", original_request_id).order("created_at", desc=True).execute()
+            
+            return [AIWishAuditLog(**log) for log in result.data] if result.data else []
+
+        except Exception as e:
+            logger.error(f"Error getting regeneration chain for request {original_request_id}: {e}")
+            raise
 
 
 # Global database manager instance

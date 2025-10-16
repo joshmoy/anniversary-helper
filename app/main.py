@@ -553,11 +553,13 @@ async def generate_anniversary_wish(
                 "request_count": 0
             }
 
-        # Generate the anniversary wish
-        generated_wish = await ai_wish_generator.generate_anniversary_wish(request)
-        
         # Generate a unique request ID
         request_id = str(uuid.uuid4())
+        
+        # Generate the anniversary wish with audit logging
+        generated_wish = await ai_wish_generator.generate_anniversary_wish(
+            request, request_id, ip_address
+        )
         
         # Prepare response
         response = AnniversaryWishResponse(
@@ -615,16 +617,37 @@ async def regenerate_anniversary_wish(
                 "request_count": 0
             }
 
-        # For now, we'll create a new request based on the regenerate request
-        # In a production system, you might want to store the original request
-        # and retrieve it using the request_id
+        # Get the original request from audit logs
+        original_audit_log = await db_manager.get_ai_wish_audit_log_by_request_id(request.request_id)
         
-        # Since we don't have the original request stored, we'll need to ask for the basic info again
-        # This is a limitation of the current implementation
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Regeneration feature requires storing original requests. Please use the main wish generation endpoint with additional context."
+        if not original_audit_log:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Original request not found. Cannot regenerate."
+            )
+        
+        # Reconstruct the original request
+        original_request_data = original_audit_log.request_data
+        original_request = AnniversaryWishRequest(**original_request_data)
+        
+        # Generate new request ID for regeneration
+        new_request_id = str(uuid.uuid4())
+        
+        # Regenerate the wish with audit logging
+        generated_wish = await ai_wish_generator.regenerate_wish(
+            original_request, request.request_id, new_request_id, ip_address, request.additional_context
         )
+        
+        # Prepare response
+        response = AnniversaryWishResponse(
+            generated_wish=generated_wish,
+            request_id=new_request_id,
+            remaining_requests=rate_info.get("remaining_requests", 0),
+            window_reset_time=rate_info.get("window_reset_time")
+        )
+        
+        logger.info(f"Regenerated anniversary wish for {original_request.name} (Original Request ID: {request.request_id}, New Request ID: {new_request_id})")
+        return response
         
     except HTTPException:
         raise
@@ -678,6 +701,79 @@ async def get_rate_limit_info(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get rate limit information."
+        )
+
+
+@app.get("/admin/ai-wish-audit-logs")
+async def get_ai_wish_audit_logs(
+    limit: int = 100,
+    offset: int = 0,
+    current_admin: Dict[str, Any] = Depends(get_current_admin)
+):
+    """
+    Get AI wish generation audit logs.
+    
+    This endpoint allows admins to view the audit trail of all AI wish generation requests.
+    """
+    try:
+        audit_logs = await db_manager.get_ai_wish_audit_logs(limit=limit, offset=offset)
+        return {
+            "audit_logs": audit_logs,
+            "total_returned": len(audit_logs),
+            "limit": limit,
+            "offset": offset
+        }
+    except Exception as e:
+        logger.error(f"Error getting AI wish audit logs: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get audit logs."
+        )
+
+
+@app.get("/admin/ai-wish-audit-logs/{request_id}")
+async def get_ai_wish_audit_log_by_id(
+    request_id: str,
+    current_admin: Dict[str, Any] = Depends(get_current_admin)
+):
+    """
+    Get a specific AI wish audit log by request ID.
+    """
+    try:
+        audit_log = await db_manager.get_ai_wish_audit_log_by_request_id(request_id)
+        if not audit_log:
+            raise HTTPException(status_code=404, detail="Audit log not found")
+        return audit_log
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting AI wish audit log {request_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get audit log."
+        )
+
+
+@app.get("/admin/ai-wish-regeneration-chain/{original_request_id}")
+async def get_ai_wish_regeneration_chain(
+    original_request_id: str,
+    current_admin: Dict[str, Any] = Depends(get_current_admin)
+):
+    """
+    Get all regenerations for a given original request ID.
+    """
+    try:
+        regeneration_chain = await db_manager.get_ai_wish_regeneration_chain(original_request_id)
+        return {
+            "original_request_id": original_request_id,
+            "regenerations": regeneration_chain,
+            "total_regenerations": len(regeneration_chain)
+        }
+    except Exception as e:
+        logger.error(f"Error getting regeneration chain for {original_request_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get regeneration chain."
         )
 
 

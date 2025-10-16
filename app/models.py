@@ -2,7 +2,7 @@
 Database models for the Church Anniversary & Birthday Helper app.
 """
 from datetime import datetime, date
-from typing import Optional
+from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field
 from enum import Enum
 
@@ -176,3 +176,29 @@ class RegenerateWishRequest(BaseModel):
     """Model for regenerating anniversary wishes."""
     request_id: str = Field(..., description="ID of the original request to regenerate")
     additional_context: Optional[str] = Field(None, description="Additional context for regeneration", max_length=500)
+
+
+# AI Wish Generation Audit Trail Models
+class AIWishAuditLog(BaseModel):
+    """Model for tracking AI wish generation requests and responses."""
+    id: int
+    request_id: str = Field(..., description="Unique identifier for this request")
+    original_request_id: Optional[str] = Field(None, description="ID of original request if this is a regeneration")
+    ip_address: str = Field(..., description="Client IP address (hashed)")
+    request_data: Dict[str, Any] = Field(..., description="JSON data of the original request")
+    response_data: Dict[str, Any] = Field(..., description="JSON data of the generated response")
+    ai_service_used: str = Field(..., description="AI service used: groq, openai, or fallback")
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AIWishAuditLogCreate(BaseModel):
+    """Model for creating new AI wish audit log entries."""
+    request_id: str = Field(..., description="Unique identifier for this request")
+    original_request_id: Optional[str] = Field(None, description="ID of original request if this is a regeneration")
+    ip_address: str = Field(..., description="Client IP address (hashed)")
+    request_data: Dict[str, Any] = Field(..., description="JSON data of the original request")
+    response_data: Dict[str, Any] = Field(..., description="JSON data of the generated response")
+    ai_service_used: str = Field(..., description="AI service used: groq, openai, or fallback")

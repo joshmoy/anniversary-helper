@@ -5,13 +5,15 @@ import logging
 import random
 import re
 import uuid
+import hashlib
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from groq import Groq
 import openai
 
 from app.config import settings
-from app.models import AnniversaryWishRequest, AnniversaryType, ToneType
+from app.models import AnniversaryWishRequest, AnniversaryType, ToneType, AIWishAuditLogCreate
+from app.database import db_manager
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,36 @@ class AIWishGenerator:
                 self.openai_client = openai.OpenAI(api_key=settings.openai_api_key)
             except Exception as e:
                 logger.warning(f"Failed to initialize OpenAI client: {e}")
+
+    def _hash_ip_address(self, ip_address: str) -> str:
+        """Hash IP address for privacy while maintaining uniqueness."""
+        return hashlib.sha256(ip_address.encode()).hexdigest()[:16]
+
+    async def _log_audit_trail(self, request_id: str, original_request_id: Optional[str], 
+                              ip_address: str, request: AnniversaryWishRequest, 
+                              response: str, ai_service_used: str):
+        """Log audit trail for AI wish generation."""
+        try:
+            # Hash IP address for privacy
+            hashed_ip = self._hash_ip_address(ip_address)
+            
+            # Prepare audit data
+            audit_data = AIWishAuditLogCreate(
+                request_id=request_id,
+                original_request_id=original_request_id,
+                ip_address=hashed_ip,
+                request_data=request.dict(),
+                response_data={"generated_wish": response},
+                ai_service_used=ai_service_used
+            )
+            
+            # Log to database
+            await db_manager.log_ai_wish_request(audit_data)
+            logger.info(f"Audit trail logged for request {request_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to log audit trail for request {request_id}: {e}")
+            # Don't raise exception - audit logging failure shouldn't break the main flow
 
     def get_inspirational_lines(self) -> List[str]:
         """Short inspirational lines you can optionally append to a wish."""
@@ -272,33 +304,50 @@ class AIWishGenerator:
         
         return message.strip()
 
-    async def generate_anniversary_wish(self, request: AnniversaryWishRequest) -> str:
+    async def generate_anniversary_wish(self, request: AnniversaryWishRequest, 
+                                       request_id: str, ip_address: str, 
+                                       original_request_id: Optional[str] = None) -> str:
         """Generate an anniversary wish for the given request."""
+        ai_service_used = "unknown"
+        
         # Try Groq first
         wish = await self.generate_wish_with_groq(request)
         if wish:
+            ai_service_used = "groq"
+            # Log audit trail
+            await self._log_audit_trail(request_id, original_request_id, ip_address, request, wish, ai_service_used)
             return wish
 
         # Try OpenAI as fallback
         wish = await self.generate_wish_with_openai(request)
         if wish:
+            ai_service_used = "openai"
+            # Log audit trail
+            await self._log_audit_trail(request_id, original_request_id, ip_address, request, wish, ai_service_used)
             return wish
 
         # Use fallback message if AI services are unavailable
         logger.warning("AI services unavailable, using fallback wish generation")
-        return self.generate_fallback_wish(request)
+        wish = self.generate_fallback_wish(request)
+        ai_service_used = "fallback"
+        # Log audit trail
+        await self._log_audit_trail(request_id, original_request_id, ip_address, request, wish, ai_service_used)
+        return wish
 
-    async def regenerate_wish(self, original_request: AnniversaryWishRequest, additional_context: Optional[str] = None) -> str:
+    async def regenerate_wish(self, original_request: AnniversaryWishRequest, 
+                             original_request_id: str, new_request_id: str, 
+                             ip_address: str, additional_context: Optional[str] = None) -> str:
         """Regenerate an anniversary wish with additional context."""
         # Create a new request with additional context
         updated_request = AnniversaryWishRequest(
             name=original_request.name,
             anniversary_type=original_request.anniversary_type,
             relationship=original_request.relationship,
+            tone=original_request.tone,
             context=original_request.context + f" {additional_context}" if original_request.context and additional_context else additional_context or original_request.context,
         )
 
-        return await self.generate_anniversary_wish(updated_request)
+        return await self.generate_anniversary_wish(updated_request, new_request_id, ip_address, original_request_id)
 
 
 # Global AI wish generator instance
