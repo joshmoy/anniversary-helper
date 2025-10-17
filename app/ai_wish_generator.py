@@ -183,7 +183,7 @@ class AIWishGenerator:
             prompt = "\n".join(prompt_parts)
 
             response = self.groq_client.chat.completions.create(
-                model="llama3-8b-8192",
+                model=settings.groq_model,
                 messages=[
                     {
                         "role": "system", 
@@ -230,7 +230,7 @@ class AIWishGenerator:
             prompt = "\n".join(prompt_parts)
 
             response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model=settings.openai_model,
                 messages=[
                     {
                         "role": "system", 
@@ -272,10 +272,6 @@ class AIWishGenerator:
         # Add a random inspirational line
         inspirational_line = random.choice(self.get_inspirational_lines())
         message = f"{base} {inspirational_line}"
-
-        # Add context if provided
-        if request.context:
-            message += f" {request.context}"
 
         return message
 

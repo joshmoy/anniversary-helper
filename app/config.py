@@ -12,7 +12,9 @@ class Settings(BaseSettings):
 
     # AI/LLM Configuration
     groq_api_key: str = Field(..., env="GROQ_API_KEY")
+    groq_model: str = Field("llama-3.1-8b-instant", env="GROQ_MODEL")
     openai_api_key: Optional[str] = Field(None, env="OPENAI_API_KEY")
+    openai_model: str = Field("gpt-3.5-turbo", env="OPENAI_MODEL")
 
     # Supabase Database Configuration
     supabase_url: str = Field(..., env="SUPABASE_URL")
