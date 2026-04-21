@@ -19,11 +19,17 @@ class DatabaseManager:
         try:
             # Only initialize if we have valid settings
             if hasattr(settings, 'supabase_url') and hasattr(settings, 'supabase_key'):
-                if settings.supabase_url and settings.supabase_key:
+                supabase_token = settings.supabase_service_key or settings.supabase_key
+
+                if settings.supabase_url and supabase_token:
                     self.supabase: Client = create_client(
                         settings.supabase_url,
-                        settings.supabase_key
+                        supabase_token
                     )
+                    if settings.supabase_service_key:
+                        logger.info("Initialized Supabase client with service role key for server-side operations")
+                    else:
+                        logger.warning("Supabase service role key not configured; falling back to SUPABASE_KEY")
                 else:
                     logger.warning("Supabase credentials not configured. Database operations will be disabled.")
                     self.supabase = None
