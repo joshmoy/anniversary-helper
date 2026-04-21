@@ -115,6 +115,7 @@ class DatabaseManager:
             people_table = """
             CREATE TABLE IF NOT EXISTS people (
                 id SERIAL PRIMARY KEY,
+                owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 name VARCHAR(255) NOT NULL,
                 event_type VARCHAR(20) NOT NULL CHECK (event_type IN ('birthday', 'anniversary')),
                 event_date VARCHAR(5) NOT NULL,
@@ -131,6 +132,7 @@ class DatabaseManager:
             message_logs_table = """
             CREATE TABLE IF NOT EXISTS message_logs (
                 id SERIAL PRIMARY KEY,
+                owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 person_id INTEGER REFERENCES people(id),
                 message_content TEXT NOT NULL,
                 sent_date DATE NOT NULL,
@@ -144,6 +146,7 @@ class DatabaseManager:
             csv_uploads_table = """
             CREATE TABLE IF NOT EXISTS csv_uploads (
                 id SERIAL PRIMARY KEY,
+                owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 filename VARCHAR(255) NOT NULL,
                 upload_date TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                 records_processed INTEGER NOT NULL,
@@ -200,10 +203,13 @@ class DatabaseManager:
             );
             """
 
-            # Create ai_wish_audit_logs table
+            # Create ai_wish_audit_logs table. owner_user_id is nullable because
+            # unauthenticated callers can generate wishes; those rows have no owner
+            # and are never surfaced through the per-user audit log endpoints.
             ai_wish_audit_logs_table = """
             CREATE TABLE IF NOT EXISTS ai_wish_audit_logs (
                 id SERIAL PRIMARY KEY,
+                owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 request_id VARCHAR(255) NOT NULL,
                 original_request_id VARCHAR(255),
                 ip_address VARCHAR(255) NOT NULL,
@@ -235,13 +241,14 @@ class DatabaseManager:
             logger.error(f"Error initializing database tables: {e}")
             raise
 
-    async def create_person(self, person_data: PersonCreate) -> Person:
-        """Create a new person in the database."""
+    async def create_person(self, person_data: PersonCreate, *, owner_user_id: int) -> Person:
+        """Create a new person owned by ``owner_user_id``."""
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
             data = {
+                "owner_user_id": owner_user_id,
                 "name": person_data.name,
                 "event_type": person_data.event_type.value,
                 "event_date": person_data.event_date,
@@ -262,10 +269,17 @@ class DatabaseManager:
             logger.error(f"Error creating person: {e}")
             raise
 
-    async def get_people_by_date(self, target_date: str) -> List[Person]:
-        """Get all active people with events on the specified date (MM-DD format)."""
+    async def get_people_by_date(self, target_date: str, *, owner_user_id: int) -> List[Person]:
+        """Get active people with events on a date, scoped to a single owner."""
         try:
-            result = self.supabase.table("people").select("*").eq("event_date", target_date).eq("active", True).execute()
+            result = (
+                self.supabase.table("people")
+                .select("*")
+                .eq("owner_user_id", owner_user_id)
+                .eq("event_date", target_date)
+                .eq("active", True)
+                .execute()
+            )
 
             return [Person(**person) for person in result.data]
 
@@ -273,24 +287,38 @@ class DatabaseManager:
             logger.error(f"Error getting people by date: {e}")
             raise
 
-    async def get_all_people(self) -> List[Person]:
-        """Get all people from the database."""
+    async def get_all_people(self, *, owner_user_id: int) -> List[Person]:
+        """Get all people owned by ``owner_user_id``."""
         try:
-            result = self.supabase.table("people").select("*").execute()
+            result = (
+                self.supabase.table("people")
+                .select("*")
+                .eq("owner_user_id", owner_user_id)
+                .execute()
+            )
             return [Person(**person) for person in result.data]
 
         except Exception as e:
             logger.error(f"Error getting all people: {e}")
             raise
 
-    async def upsert_person(self, person_data: PersonCreate) -> Person:
-        """Insert or update a person based on name and event_type."""
+    async def upsert_person(self, person_data: PersonCreate, *, owner_user_id: int) -> Person:
+        """Insert or update a person keyed on (owner_user_id, name, event_type).
+
+        The upsert key is scoped to the owner so two different users can each
+        have a "John Smith birthday" without colliding.
+        """
         try:
-            # Check if person already exists
-            existing = self.supabase.table("people").select("*").eq("name", person_data.name).eq("event_type", person_data.event_type.value).execute()
+            existing = (
+                self.supabase.table("people")
+                .select("*")
+                .eq("owner_user_id", owner_user_id)
+                .eq("name", person_data.name)
+                .eq("event_type", person_data.event_type.value)
+                .execute()
+            )
 
             if existing.data:
-                # Update existing person
                 person_id = existing.data[0]["id"]
                 update_data = {
                     "event_date": person_data.event_date,
@@ -301,20 +329,34 @@ class DatabaseManager:
                     "updated_at": datetime.now().isoformat()
                 }
 
-                result = self.supabase.table("people").update(update_data).eq("id", person_id).execute()
+                result = (
+                    self.supabase.table("people")
+                    .update(update_data)
+                    .eq("id", person_id)
+                    .eq("owner_user_id", owner_user_id)
+                    .execute()
+                )
                 return Person(**result.data[0])
-            else:
-                # Create new person
-                return await self.create_person(person_data)
+            return await self.create_person(person_data, owner_user_id=owner_user_id)
 
         except Exception as e:
             logger.error(f"Error upserting person: {e}")
             raise
 
-    async def log_message(self, person_id: int, message_content: str, sent_date: date, success: bool, error_message: Optional[str] = None):
-        """Log a sent message."""
+    async def log_message(
+        self,
+        person_id: int,
+        message_content: str,
+        sent_date: date,
+        success: bool,
+        error_message: Optional[str] = None,
+        *,
+        owner_user_id: int,
+    ):
+        """Log a sent message under ``owner_user_id``."""
         try:
             data = {
+                "owner_user_id": owner_user_id,
                 "person_id": person_id,
                 "message_content": message_content,
                 "sent_date": sent_date.isoformat(),
@@ -329,23 +371,26 @@ class DatabaseManager:
             logger.error(f"Error logging message: {e}")
             raise
 
-    async def get_all_message_logs(self):
-        """Get all message logs with person information."""
+    async def get_all_message_logs(self, *, owner_user_id: int):
+        """Get message logs owned by ``owner_user_id``, with person info joined."""
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
-            # Get message logs with person information
-            result = self.supabase.table("message_logs").select(
-                "*, people(name, event_type, phone_number)"
-            ).order("created_at", desc=True).execute()
+            result = (
+                self.supabase.table("message_logs")
+                .select("*, people(name, event_type, phone_number)")
+                .eq("owner_user_id", owner_user_id)
+                .order("created_at", desc=True)
+                .execute()
+            )
 
             if result.data:
-                # Transform the data to include person info at the top level
                 messages = []
                 for log in result.data:
                     message_data = {
                         "id": log["id"],
+                        "owner_user_id": log["owner_user_id"],
                         "person_id": log["person_id"],
                         "message_content": log["message_content"],
                         "sent_date": log["sent_date"],
@@ -364,20 +409,30 @@ class DatabaseManager:
             logger.error(f"Error getting message logs: {e}")
             raise
 
-    async def get_message_log_by_id(self, message_id: int):
-        """Get a specific message log by ID."""
+    async def get_message_log_by_id(self, message_id: int, *, owner_user_id: int):
+        """Get a specific message log if it belongs to ``owner_user_id``.
+
+        Returns ``None`` both when the log does not exist and when it exists
+        but is owned by someone else; callers translate that into a 404 so we
+        don't leak the existence of cross-tenant rows.
+        """
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
-            result = self.supabase.table("message_logs").select(
-                "*, people(name, event_type, phone_number)"
-            ).eq("id", message_id).execute()
+            result = (
+                self.supabase.table("message_logs")
+                .select("*, people(name, event_type, phone_number)")
+                .eq("id", message_id)
+                .eq("owner_user_id", owner_user_id)
+                .execute()
+            )
 
             if result.data and len(result.data) > 0:
                 log = result.data[0]
                 return {
                     "id": log["id"],
+                    "owner_user_id": log["owner_user_id"],
                     "person_id": log["person_id"],
                     "message_content": log["message_content"],
                     "sent_date": log["sent_date"],
@@ -394,13 +449,19 @@ class DatabaseManager:
             logger.error(f"Error getting message log {message_id}: {e}")
             raise
 
-    async def get_person_by_id(self, person_id: int) -> Person:
-        """Get a specific person by ID."""
+    async def get_person_by_id(self, person_id: int, *, owner_user_id: int) -> Optional[Person]:
+        """Get a person if owned by ``owner_user_id``; otherwise return None."""
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
-            result = self.supabase.table("people").select("*").eq("id", person_id).execute()
+            result = (
+                self.supabase.table("people")
+                .select("*")
+                .eq("id", person_id)
+                .eq("owner_user_id", owner_user_id)
+                .execute()
+            )
 
             if result.data and len(result.data) > 0:
                 return Person(**result.data[0])
@@ -410,13 +471,18 @@ class DatabaseManager:
             logger.error(f"Error getting person {person_id}: {e}")
             raise
 
-    async def update_person(self, person_id: int, person_data: PersonUpdate) -> Person:
-        """Update a person's information."""
+    async def update_person(
+        self,
+        person_id: int,
+        person_data: PersonUpdate,
+        *,
+        owner_user_id: int,
+    ) -> Optional[Person]:
+        """Update a person only if it belongs to ``owner_user_id``."""
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
-            # Build update data from non-None fields
             update_data = {}
             if person_data.name is not None:
                 update_data["name"] = person_data.name
@@ -436,12 +502,22 @@ class DatabaseManager:
             if update_data:
                 update_data["updated_at"] = datetime.now().isoformat()
 
-                # Perform the update
-                update_result = self.supabase.table("people").update(update_data).eq("id", person_id).execute()
-                
-                # Fetch the updated record
+                update_result = (
+                    self.supabase.table("people")
+                    .update(update_data)
+                    .eq("id", person_id)
+                    .eq("owner_user_id", owner_user_id)
+                    .execute()
+                )
+
                 if update_result.data:
-                    fetch_result = self.supabase.table("people").select("*").eq("id", person_id).execute()
+                    fetch_result = (
+                        self.supabase.table("people")
+                        .select("*")
+                        .eq("id", person_id)
+                        .eq("owner_user_id", owner_user_id)
+                        .execute()
+                    )
                     if fetch_result.data and len(fetch_result.data) > 0:
                         return Person(**fetch_result.data[0])
 
@@ -451,32 +527,50 @@ class DatabaseManager:
             logger.error(f"Error updating person {person_id}: {e}")
             raise
 
-    async def delete_person(self, person_id: int) -> bool:
-        """Soft delete a person by setting active=False."""
+    async def delete_person(self, person_id: int, *, owner_user_id: int) -> bool:
+        """Soft delete (active=False) if the person belongs to ``owner_user_id``."""
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
-            result = self.supabase.table("people").update({
-                "active": False,
-                "updated_at": datetime.now().isoformat()
-            }).eq("id", person_id).execute()
+            result = (
+                self.supabase.table("people")
+                .update(
+                    {
+                        "active": False,
+                        "updated_at": datetime.now().isoformat(),
+                    }
+                )
+                .eq("id", person_id)
+                .eq("owner_user_id", owner_user_id)
+                .execute()
+            )
 
-            return result.data and len(result.data) > 0
+            return bool(result.data)
 
         except Exception as e:
             logger.error(f"Error deleting person {person_id}: {e}")
             raise
 
-    async def log_csv_upload(self, filename: str, records_processed: int, records_added: int, 
-                            records_updated: int, success: bool, error_message: Optional[str] = None, 
-                            storage_path: Optional[str] = None) -> None:
-        """Log a CSV upload operation."""
+    async def log_csv_upload(
+        self,
+        filename: str,
+        records_processed: int,
+        records_added: int,
+        records_updated: int,
+        success: bool,
+        error_message: Optional[str] = None,
+        storage_path: Optional[str] = None,
+        *,
+        owner_user_id: int,
+    ) -> None:
+        """Log a CSV upload owned by ``owner_user_id``."""
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
             data = {
+                "owner_user_id": owner_user_id,
                 "filename": filename,
                 "upload_date": datetime.now().isoformat(),
                 "records_processed": records_processed,
@@ -494,13 +588,19 @@ class DatabaseManager:
             logger.error(f"Error logging CSV upload: {e}")
             raise
 
-    async def get_csv_upload_history(self) -> List[Dict[str, Any]]:
-        """Get all CSV upload history."""
+    async def get_csv_upload_history(self, *, owner_user_id: int) -> List[Dict[str, Any]]:
+        """Get CSV upload history for ``owner_user_id``."""
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
-            result = self.supabase.table("csv_uploads").select("*").order("upload_date", desc=True).execute()
+            result = (
+                self.supabase.table("csv_uploads")
+                .select("*")
+                .eq("owner_user_id", owner_user_id)
+                .order("upload_date", desc=True)
+                .execute()
+            )
             return result.data if result.data else []
 
         except Exception as e:
@@ -871,12 +971,17 @@ class DatabaseManager:
 
     # AI Wish Generation Audit Trail Methods
     async def log_ai_wish_request(self, audit_data: AIWishAuditLogCreate) -> AIWishAuditLog:
-        """Log an AI wish generation request and response."""
+        """Log an AI wish generation request and response.
+
+        ``audit_data.owner_user_id`` may be ``None`` for anonymous callers; those
+        rows remain invisible to the per-user audit log endpoints.
+        """
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
             data = {
+                "owner_user_id": audit_data.owner_user_id,
                 "request_id": audit_data.request_id,
                 "original_request_id": audit_data.original_request_id,
                 "ip_address": audit_data.ip_address,
@@ -896,27 +1001,59 @@ class DatabaseManager:
             logger.error(f"Error logging AI wish request: {e}")
             raise
 
-    async def get_ai_wish_audit_logs(self, limit: int = 100, offset: int = 0) -> List[AIWishAuditLog]:
-        """Get AI wish generation audit logs."""
+    async def get_ai_wish_audit_logs(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        owner_user_id: int,
+    ) -> List[AIWishAuditLog]:
+        """Return audit logs for ``owner_user_id``. Anonymous rows are excluded."""
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
-            result = self.supabase.table("ai_wish_audit_logs").select("*").order("created_at", desc=True).range(offset, offset + limit - 1).execute()
-            
+            result = (
+                self.supabase.table("ai_wish_audit_logs")
+                .select("*")
+                .eq("owner_user_id", owner_user_id)
+                .order("created_at", desc=True)
+                .range(offset, offset + limit - 1)
+                .execute()
+            )
+
             return [AIWishAuditLog(**log) for log in result.data] if result.data else []
 
         except Exception as e:
             logger.error(f"Error getting AI wish audit logs: {e}")
             raise
 
-    async def get_ai_wish_audit_log_by_request_id(self, request_id: str) -> Optional[AIWishAuditLog]:
-        """Get AI wish audit log by request ID."""
+    async def get_ai_wish_audit_log_by_request_id(
+        self,
+        request_id: str,
+        *,
+        owner_user_id: Optional[int] = None,
+    ) -> Optional[AIWishAuditLog]:
+        """Get an audit log by request id.
+
+        When ``owner_user_id`` is provided the lookup is scoped to that user
+        (used by the per-user audit endpoints). When it's ``None`` the lookup
+        is unscoped — this is only used internally by
+        ``/api/anniversary-wish/regenerate`` so public callers can regenerate
+        their own anonymous wishes by request id.
+        """
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
-            result = self.supabase.table("ai_wish_audit_logs").select("*").eq("request_id", request_id).execute()
+            query = (
+                self.supabase.table("ai_wish_audit_logs")
+                .select("*")
+                .eq("request_id", request_id)
+            )
+            if owner_user_id is not None:
+                query = query.eq("owner_user_id", owner_user_id)
+            result = query.execute()
 
             if result.data and len(result.data) > 0:
                 return AIWishAuditLog(**result.data[0])
@@ -926,14 +1063,26 @@ class DatabaseManager:
             logger.error(f"Error getting AI wish audit log for request {request_id}: {e}")
             raise
 
-    async def get_ai_wish_regeneration_chain(self, original_request_id: str) -> List[AIWishAuditLog]:
-        """Get all regenerations for a given original request ID."""
+    async def get_ai_wish_regeneration_chain(
+        self,
+        original_request_id: str,
+        *,
+        owner_user_id: int,
+    ) -> List[AIWishAuditLog]:
+        """Get regenerations of a request, scoped to ``owner_user_id``."""
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
-            result = self.supabase.table("ai_wish_audit_logs").select("*").eq("original_request_id", original_request_id).order("created_at", desc=True).execute()
-            
+            result = (
+                self.supabase.table("ai_wish_audit_logs")
+                .select("*")
+                .eq("original_request_id", original_request_id)
+                .eq("owner_user_id", owner_user_id)
+                .order("created_at", desc=True)
+                .execute()
+            )
+
             return [AIWishAuditLog(**log) for log in result.data] if result.data else []
 
         except Exception as e:

@@ -44,16 +44,21 @@ class AIWishGenerator:
         """Hash IP address for privacy while maintaining uniqueness."""
         return hashlib.sha256(ip_address.encode()).hexdigest()[:16]
 
-    async def _log_audit_trail(self, request_id: str, original_request_id: Optional[str], 
-                              ip_address: str, request: AnniversaryWishRequest, 
-                              response: str, ai_service_used: str):
-        """Log audit trail for AI wish generation."""
+    async def _log_audit_trail(self, request_id: str, original_request_id: Optional[str],
+                              ip_address: str, request: AnniversaryWishRequest,
+                              response: str, ai_service_used: str,
+                              owner_user_id: Optional[int] = None):
+        """Log audit trail for AI wish generation.
+
+        ``owner_user_id`` is set for authenticated callers and left ``None`` for
+        anonymous callers; unauthenticated rows are never surfaced through the
+        per-user audit-log endpoints.
+        """
         try:
-            # Hash IP address for privacy
             hashed_ip = self._hash_ip_address(ip_address)
-            
-            # Prepare audit data
+
             audit_data = AIWishAuditLogCreate(
+                owner_user_id=owner_user_id,
                 request_id=request_id,
                 original_request_id=original_request_id,
                 ip_address=hashed_ip,
@@ -300,41 +305,36 @@ class AIWishGenerator:
         
         return message.strip()
 
-    async def generate_anniversary_wish(self, request: AnniversaryWishRequest, 
-                                       request_id: str, ip_address: str, 
-                                       original_request_id: Optional[str] = None) -> str:
+    async def generate_anniversary_wish(self, request: AnniversaryWishRequest,
+                                       request_id: str, ip_address: str,
+                                       original_request_id: Optional[str] = None,
+                                       owner_user_id: Optional[int] = None) -> str:
         """Generate an anniversary wish for the given request."""
         ai_service_used = "unknown"
-        
-        # Try Groq first
+
         wish = await self.generate_wish_with_groq(request)
         if wish:
             ai_service_used = "groq"
-            # Log audit trail
-            await self._log_audit_trail(request_id, original_request_id, ip_address, request, wish, ai_service_used)
+            await self._log_audit_trail(request_id, original_request_id, ip_address, request, wish, ai_service_used, owner_user_id)
             return wish
 
-        # Try OpenAI as fallback
         wish = await self.generate_wish_with_openai(request)
         if wish:
             ai_service_used = "openai"
-            # Log audit trail
-            await self._log_audit_trail(request_id, original_request_id, ip_address, request, wish, ai_service_used)
+            await self._log_audit_trail(request_id, original_request_id, ip_address, request, wish, ai_service_used, owner_user_id)
             return wish
 
-        # Use fallback message if AI services are unavailable
         logger.warning("AI services unavailable, using fallback wish generation")
         wish = self.generate_fallback_wish(request)
         ai_service_used = "fallback"
-        # Log audit trail
-        await self._log_audit_trail(request_id, original_request_id, ip_address, request, wish, ai_service_used)
+        await self._log_audit_trail(request_id, original_request_id, ip_address, request, wish, ai_service_used, owner_user_id)
         return wish
 
-    async def regenerate_wish(self, original_request: AnniversaryWishRequest, 
-                             original_request_id: str, new_request_id: str, 
-                             ip_address: str, additional_context: Optional[str] = None) -> str:
+    async def regenerate_wish(self, original_request: AnniversaryWishRequest,
+                             original_request_id: str, new_request_id: str,
+                             ip_address: str, additional_context: Optional[str] = None,
+                             owner_user_id: Optional[int] = None) -> str:
         """Regenerate an anniversary wish with additional context."""
-        # Create a new request with additional context
         updated_request = AnniversaryWishRequest(
             name=original_request.name,
             anniversary_type=original_request.anniversary_type,
@@ -343,7 +343,13 @@ class AIWishGenerator:
             context=original_request.context + f" {additional_context}" if original_request.context and additional_context else additional_context or original_request.context,
         )
 
-        return await self.generate_anniversary_wish(updated_request, new_request_id, ip_address, original_request_id)
+        return await self.generate_anniversary_wish(
+            updated_request,
+            new_request_id,
+            ip_address,
+            original_request_id,
+            owner_user_id=owner_user_id,
+        )
 
 
 # Global AI wish generator instance

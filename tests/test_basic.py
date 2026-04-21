@@ -37,6 +37,7 @@ class TestDateManager:
         # Create a person with birth year
         person_data = {
             "id": 1,
+            "owner_user_id": 1,
             "name": "Test Person",
             "event_type": EventType.BIRTHDAY,
             "event_date": "03-15",
