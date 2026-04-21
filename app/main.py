@@ -20,7 +20,7 @@ from app.models import (
     AnniversaryWishRequest, AnniversaryWishResponse, RegenerateWishRequest,
     AnniversaryType, ToneType
 )
-from app.services import csv_manager, date_manager, whatsapp_messenger, storage_manager
+from app.services import csv_manager, date_manager, coordinator_notifier, storage_manager
 from app.scheduler import celebration_scheduler
 from app.auth import auth_service, get_current_admin, get_current_user, get_optional_current_user
 from app.rate_limiter import rate_limit_service
@@ -72,7 +72,7 @@ app = FastAPI(
     * **Automated Celebrations**: Daily automated checks for birthdays and anniversaries
     * **CSV Data Management**: Easy monthly data uploads via CSV files
     * **AI-Generated Messages**: Creates personalized Christian messages with Bible verses
-    * **WhatsApp Integration**: Sends messages directly to your church WhatsApp group
+    * **Coordinator Delivery**: Sends the generated daily message to one coordinator over SMS, email, WhatsApp, or Telegram
     * **Anniversary Wish API**: Generate personalized AI-powered anniversary wishes
     * **Rate Limiting**: Protects API endpoints with configurable rate limits
     
@@ -476,7 +476,7 @@ async def cron_hook(x_cron_secret: str | None = Header(None)):
 async def send_daily_celebrations(current_admin: Dict[str, Any] = Depends(get_current_admin)):
     """Manually trigger sending celebration messages for today. Requires authentication."""
     try:
-        result = await whatsapp_messenger.send_daily_celebrations()
+        result = await coordinator_notifier.send_daily_celebrations()
         return result
     except Exception as e:
         logger.error(f"Error sending celebrations: {e}")

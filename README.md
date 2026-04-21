@@ -1,13 +1,13 @@
 # Church Anniversary & Birthday Helper
 
-An automated system that reads monthly CSV data to detect birthdays and anniversaries, generates Christian-themed celebration messages using AI, and sends them to a WhatsApp group daily.
+An automated system that reads monthly CSV data to detect birthdays and anniversaries, generates Christian-themed celebration messages using AI, and sends the finished message to a coordinator daily across flexible delivery channels for manual posting to WhatsApp.
 
 ## Features
 
 - 📅 **Daily Automated Checks**: Automatically checks for birthdays/anniversaries each day
 - 📊 **CSV Data Management**: Easy monthly data uploads via CSV files
 - 🤖 **AI-Generated Messages**: Creates personalized Christian messages with Bible verses
-- 📱 **WhatsApp Integration**: Sends messages directly to your church WhatsApp group
+- 📱 **Coordinator Delivery**: Sends the daily message to one coordinator by SMS, email, WhatsApp, or Telegram
 - ⛪ **Christian-Themed**: All messages are crafted with godly content and biblical references
 - 💰 **Cost-Effective**: Designed to run on free/low-cost infrastructure
 
@@ -15,7 +15,7 @@ An automated system that reads monthly CSV data to detect birthdays and annivers
 
 - **Backend**: Python with FastAPI
 - **AI/LLM**: Groq (free tier) with Llama models
-- **WhatsApp**: Twilio WhatsApp API
+- **Messaging**: Twilio for SMS/WhatsApp, SMTP for email, Telegram Bot API for Telegram
 - **Database**: Supabase (free PostgreSQL)
 - **Deployment**: Railway (free tier)
 - **Scheduling**: APScheduler
@@ -86,8 +86,13 @@ All configuration is done through environment variables:
 - `SUPABASE_KEY`: Your Supabase anon/public key
 - `TWILIO_ACCOUNT_SID`: Twilio account SID
 - `TWILIO_AUTH_TOKEN`: Twilio auth token
-- `WHATSAPP_FROM`: Your Twilio WhatsApp number
-- `WHATSAPP_TO`: Target WhatsApp group number
+- `COORDINATOR_CHANNELS`: Comma-separated channels such as `sms,email`
+- `COORDINATOR_PHONE`: Coordinator phone number for `sms` or `whatsapp`
+- `COORDINATOR_EMAIL`: Coordinator email address for `email`
+- `SMS_FROM`: Your Twilio SMS-enabled number when using SMS delivery
+- `WHATSAPP_FROM`: Your Twilio WhatsApp number when using WhatsApp delivery
+- `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM_EMAIL`: SMTP settings for email delivery
+- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`: Telegram bot settings for Telegram delivery
 - `SCHEDULE_TIME`: Daily check time (default: "09:00")
 
 ## Auth Hashing without Passlib

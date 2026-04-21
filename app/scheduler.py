@@ -10,7 +10,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.config import settings
-from app.services import whatsapp_messenger
+from app.services import coordinator_notifier
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class CelebrationScheduler:
             logger.info("Starting daily celebration check...")
 
             # Send daily celebrations
-            result = await whatsapp_messenger.send_daily_celebrations()
+            result = await coordinator_notifier.send_daily_celebrations()
 
             if result["success"]:
                 logger.info(f"Daily celebration job completed successfully. Sent {result['sent_count']} messages.")

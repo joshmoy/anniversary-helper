@@ -65,12 +65,13 @@ CREATE TABLE IF NOT EXISTS csv_uploads (
 );
 ```
 
-## Step 3: Setup Twilio WhatsApp
+## Step 3: Setup Coordinator Delivery
 
 1. Create a [Twilio account](https://www.twilio.com)
-2. Go to Console > Messaging > Try it out > Send a WhatsApp message
-3. Follow the sandbox setup instructions
-4. Note your Account SID, Auth Token, and WhatsApp numbers
+2. Decide which channels you want to use first
+3. For SMS/WhatsApp, note your Twilio Account SID, Auth Token, and sender number details
+4. For email, note your SMTP credentials
+5. For Telegram, create a bot and note the bot token and chat ID
 
 ## Step 4: Get AI API Keys
 
@@ -103,11 +104,28 @@ OPENAI_API_KEY=your_openai_key_if_using
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your_supabase_anon_key
 
-# Twilio WhatsApp Configuration
+# Coordinator Delivery Configuration
 TWILIO_ACCOUNT_SID=your_twilio_account_sid
 TWILIO_AUTH_TOKEN=your_twilio_auth_token
+COORDINATOR_CHANNELS=sms,email
+COORDINATOR_DELIVERY_CHANNEL=sms
+COORDINATOR_PHONE=+your_coordinator_number
+COORDINATOR_EMAIL=coordinator@example.com
+SMS_FROM=+your_twilio_sms_number
 WHATSAPP_FROM=whatsapp:+14155238886
-WHATSAPP_TO=whatsapp:+your_group_number
+COORDINATOR_TO=+your_coordinator_number
+
+# Email Delivery Configuration
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=your_smtp_username
+SMTP_PASSWORD=your_smtp_password
+SMTP_FROM_EMAIL=noreply@example.com
+SMTP_USE_TLS=true
+
+# Telegram Delivery Configuration
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
 
 # Application Configuration
 SCHEDULE_TIME=09:00

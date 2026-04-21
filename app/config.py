@@ -1,7 +1,6 @@
 """
 Configuration settings for the Church Anniversary & Birthday Helper app.
 """
-import os
 from typing import Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field, ConfigDict
@@ -24,11 +23,29 @@ class Settings(BaseSettings):
     # Supabase Storage Configuration
     supabase_storage_bucket: str = Field("csv-uploads", env="SUPABASE_STORAGE_BUCKET")
 
-    # Twilio WhatsApp Configuration
+    # Multi-channel coordinator delivery configuration
     twilio_account_sid: str = Field(..., env="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str = Field(..., env="TWILIO_AUTH_TOKEN")
-    whatsapp_from: str = Field(..., env="WHATSAPP_FROM")
-    whatsapp_to: str = Field(..., env="WHATSAPP_TO")
+    coordinator_channels: str = Field("sms", env="COORDINATOR_CHANNELS")
+    coordinator_delivery_channel: str = Field("whatsapp", env="COORDINATOR_DELIVERY_CHANNEL")
+    whatsapp_from: Optional[str] = Field(None, env="WHATSAPP_FROM")
+    whatsapp_to: Optional[str] = Field(None, env="WHATSAPP_TO")
+    sms_from: Optional[str] = Field(None, env="SMS_FROM")
+    coordinator_phone: Optional[str] = Field(None, env="COORDINATOR_PHONE")
+    coordinator_to: Optional[str] = Field(None, env="COORDINATOR_TO")
+    coordinator_email: Optional[str] = Field(None, env="COORDINATOR_EMAIL")
+
+    # Email delivery configuration
+    smtp_host: Optional[str] = Field(None, env="SMTP_HOST")
+    smtp_port: int = Field(587, env="SMTP_PORT")
+    smtp_username: Optional[str] = Field(None, env="SMTP_USERNAME")
+    smtp_password: Optional[str] = Field(None, env="SMTP_PASSWORD")
+    smtp_from_email: Optional[str] = Field(None, env="SMTP_FROM_EMAIL")
+    smtp_use_tls: bool = Field(True, env="SMTP_USE_TLS")
+
+    # Telegram delivery configuration
+    telegram_bot_token: Optional[str] = Field(None, env="TELEGRAM_BOT_TOKEN")
+    telegram_chat_id: Optional[str] = Field(None, env="TELEGRAM_CHAT_ID")
 
     # Application Configuration
     schedule_time: str = Field("06:00", env="SCHEDULE_TIME")

@@ -9,9 +9,12 @@ import re
 import random
 import io
 import tempfile
+import smtplib
+from email.message import EmailMessage
 
 from groq import Groq
 import openai
+import requests
 from twilio.rest import Client as TwilioClient
 
 from app.database import db_manager
@@ -565,8 +568,8 @@ class AIMessageGenerator:
         return self.generate_fallback_message(celebration_info)
 
 
-class WhatsAppMessenger:
-    """Handles WhatsApp messaging via Twilio."""
+class CoordinatorNotifier:
+    """Sends generated celebration messages to a coordinator over one or more channels."""
 
     def __init__(self):
         """Initialize Twilio client."""
@@ -581,31 +584,179 @@ class WhatsAppMessenger:
         except Exception as e:
             logger.error(f"Failed to initialize Twilio client: {e}")
 
-    async def send_message(self, message: str) -> Dict[str, Any]:
-        """Send a message to the configured WhatsApp group."""
+    def _get_enabled_channels(self) -> List[str]:
+        """Return the enabled coordinator delivery channels."""
+        raw_channels = settings.coordinator_channels.strip()
+        if raw_channels:
+            channels = [channel.strip().lower() for channel in raw_channels.split(",") if channel.strip()]
+        else:
+            channels = [settings.coordinator_delivery_channel.strip().lower()]
+
+        unique_channels: List[str] = []
+        for channel in channels:
+            if channel not in unique_channels:
+                unique_channels.append(channel)
+
+        if not unique_channels:
+            raise ValueError("Set COORDINATOR_CHANNELS to at least one channel")
+
+        return unique_channels
+
+    def _get_phone_recipient(self) -> str:
+        """Return the configured phone recipient for SMS or WhatsApp delivery."""
+        phone_recipient = settings.coordinator_phone or settings.coordinator_to or settings.whatsapp_to
+        if not phone_recipient:
+            raise ValueError("Set COORDINATOR_PHONE or COORDINATOR_TO for phone-based delivery")
+        return phone_recipient
+
+    def _resolve_twilio_routing(self, channel: str) -> Dict[str, str]:
+        """Resolve Twilio sender/recipient settings for SMS or WhatsApp delivery."""
+        to_value = self._get_phone_recipient()
+
+        if channel == "whatsapp":
+            if not settings.whatsapp_from:
+                raise ValueError("WHATSAPP_FROM must be set when using coordinator WhatsApp delivery")
+
+            if not to_value.startswith("whatsapp:"):
+                to_value = f"whatsapp:{to_value}"
+
+            return {"channel": channel, "from": settings.whatsapp_from, "to": to_value}
+
+        if channel == "sms":
+            if not settings.sms_from:
+                raise ValueError("SMS_FROM must be set when using coordinator SMS delivery")
+
+            return {"channel": channel, "from": settings.sms_from, "to": to_value}
+
+        raise ValueError(f"Unsupported Twilio channel: {channel}")
+
+    def _send_via_twilio(self, channel: str, message: str) -> Dict[str, Any]:
+        """Send a coordinator message through Twilio."""
+        routing = self._resolve_twilio_routing(channel)
+        message_instance = self.client.messages.create(
+            body=message,
+            from_=routing["from"],
+            to=routing["to"]
+        )
+
+        logger.info(
+            "Coordinator message sent successfully via %s. SID: %s",
+            routing["channel"],
+            message_instance.sid
+        )
+
+        return {
+            "success": True,
+            "channel": routing["channel"],
+            "message_sid": message_instance.sid,
+            "status": message_instance.status,
+        }
+
+    def _send_via_email(self, subject: str, message: str) -> Dict[str, Any]:
+        """Send a coordinator message by email using SMTP."""
+        if not settings.coordinator_email:
+            raise ValueError("COORDINATOR_EMAIL must be set when using email delivery")
+        if not settings.smtp_host:
+            raise ValueError("SMTP_HOST must be set when using email delivery")
+        if not settings.smtp_from_email:
+            raise ValueError("SMTP_FROM_EMAIL must be set when using email delivery")
+
+        email_message = EmailMessage()
+        email_message["Subject"] = subject
+        email_message["From"] = settings.smtp_from_email
+        email_message["To"] = settings.coordinator_email
+        email_message.set_content(message)
+
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as smtp:
+            if settings.smtp_use_tls:
+                smtp.starttls()
+            if settings.smtp_username and settings.smtp_password:
+                smtp.login(settings.smtp_username, settings.smtp_password)
+            smtp.send_message(email_message)
+
+        logger.info("Coordinator message sent successfully via email to %s", settings.coordinator_email)
+        return {
+            "success": True,
+            "channel": "email",
+            "to": settings.coordinator_email,
+        }
+
+    def _send_via_telegram(self, message: str) -> Dict[str, Any]:
+        """Send a coordinator message to Telegram using a bot."""
+        if not settings.telegram_bot_token:
+            raise ValueError("TELEGRAM_BOT_TOKEN must be set when using telegram delivery")
+        if not settings.telegram_chat_id:
+            raise ValueError("TELEGRAM_CHAT_ID must be set when using telegram delivery")
+
+        response = requests.post(
+            f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage",
+            json={
+                "chat_id": settings.telegram_chat_id,
+                "text": message,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+        logger.info("Coordinator message sent successfully via telegram to %s", settings.telegram_chat_id)
+        return {
+            "success": True,
+            "channel": "telegram",
+            "message_id": payload.get("result", {}).get("message_id"),
+        }
+
+    def _send_to_channel(self, channel: str, subject: str, message: str) -> Dict[str, Any]:
+        """Send the message to a single coordinator channel."""
+        if channel in {"sms", "whatsapp"}:
+            if not self.client:
+                raise ValueError("Twilio client not initialized")
+            return self._send_via_twilio(channel, message)
+        if channel == "email":
+            return self._send_via_email(subject, message)
+        if channel == "telegram":
+            return self._send_via_telegram(message)
+        raise ValueError(f"Unsupported coordinator channel: {channel}")
+
+    async def send_message(self, message: str, subject: Optional[str] = None) -> Dict[str, Any]:
+        """Send a message to the configured coordinator channels."""
         if not self.client:
-            return {
-                "success": False,
-                "error": "Twilio client not initialized"
-            }
+            twilio_required = any(channel in {"sms", "whatsapp"} for channel in self._get_enabled_channels())
+            if twilio_required:
+                return {
+                    "success": False,
+                    "error": "Twilio client not initialized"
+                }
 
         try:
-            message_instance = self.client.messages.create(
-                body=message,
-                from_=settings.whatsapp_from,
-                to=settings.whatsapp_to
-            )
+            delivery_subject = subject or "Daily celebration message"
+            results = []
+            failed_channels = []
 
-            logger.info(f"WhatsApp message sent successfully. SID: {message_instance.sid}")
+            for channel in self._get_enabled_channels():
+                try:
+                    results.append(self._send_to_channel(channel, delivery_subject, message))
+                except Exception as channel_error:
+                    logger.error("Error sending coordinator message via %s: %s", channel, channel_error)
+                    results.append({
+                        "success": False,
+                        "channel": channel,
+                        "error": str(channel_error),
+                    })
+                    failed_channels.append(channel)
+
+            successful_channels = [result["channel"] for result in results if result.get("success")]
 
             return {
-                "success": True,
-                "message_sid": message_instance.sid,
-                "status": message_instance.status
+                "success": len(successful_channels) > 0,
+                "channels": [result["channel"] for result in results],
+                "successful_channels": successful_channels,
+                "failed_channels": failed_channels,
+                "results": results,
             }
 
         except Exception as e:
-            logger.error(f"Error sending WhatsApp message: {e}")
+            logger.error(f"Error sending coordinator message: {e}")
             return {
                 "success": False,
                 "error": str(e)
@@ -664,9 +815,10 @@ class WhatsAppMessenger:
 
             # Generate consolidated message
             consolidated_message = await self.generate_consolidated_celebration_message(celebrations)
+            subject = f"Daily celebration message for {date.today().isoformat()}"
 
             # Send the single consolidated message
-            result = await self.send_message(consolidated_message)
+            result = await self.send_message(consolidated_message, subject=subject)
 
             # Log the message attempt for all people
             for person in celebrations:
@@ -679,22 +831,30 @@ class WhatsAppMessenger:
                 )
 
             if result["success"]:
-                logger.info(f"Sent consolidated celebration message for {len(celebrations)} people")
+                logger.info(
+                    f"Sent consolidated celebration message for {len(celebrations)} people "
+                    f"to coordinator via {', '.join(result.get('successful_channels', []))}"
+                )
                 return {
                     "success": True,
                     "sent_count": 1,  # One consolidated message
                     "failed_count": 0,
                     "errors": [],
                     "total_celebrations": len(celebrations),
-                    "message": "Consolidated celebration message sent successfully"
+                    "message": "Consolidated celebration message sent to coordinator successfully",
+                    "channels": result.get("successful_channels", [])
                 }
             else:
-                logger.error(f"Failed to send consolidated message: {result.get('error')}")
+                logger.error(f"Failed to send consolidated message: {result}")
                 return {
                     "success": False,
                     "sent_count": 0,
-                    "failed_count": 1,
-                    "errors": [result.get("error", "Unknown error")],
+                    "failed_count": len(result.get("failed_channels", [])) or 1,
+                    "errors": [
+                        delivery_result.get("error", "Unknown error")
+                        for delivery_result in result.get("results", [])
+                        if not delivery_result.get("success")
+                    ] or ["Unknown error"],
                     "total_celebrations": len(celebrations)
                 }
 
@@ -787,4 +947,4 @@ storage_manager = StorageManager()
 csv_manager = CSVManager()
 date_manager = DateManager()
 ai_generator = AIMessageGenerator()
-whatsapp_messenger = WhatsAppMessenger()
+coordinator_notifier = CoordinatorNotifier()
