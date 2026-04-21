@@ -22,7 +22,7 @@ from app.models import (
 )
 from app.services import csv_manager, date_manager, coordinator_notifier, storage_manager
 from app.scheduler import celebration_scheduler
-from app.auth import auth_service, get_current_admin, get_current_user, get_optional_current_user
+from app.auth import auth_service, get_current_user, get_optional_current_user
 from app.rate_limiter import rate_limit_service
 from app.ai_wish_generator import ai_wish_generator
 
@@ -104,7 +104,7 @@ app = FastAPI(
     
     ## Authentication
     
-    * Admin endpoints require admin role JWT authentication
+    * Management endpoints require a valid JWT (any authenticated user)
     * Anniversary wish endpoints work without authentication (with rate limiting)
     * Authenticated users have unlimited access to wish generation
     """,
@@ -363,7 +363,7 @@ async def update_current_user_info(
 
 
 @app.get("/people", response_model=List[Person])
-async def get_all_people(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+async def get_all_people(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Get all people in the database. Requires authentication."""
     try:
         return await db_manager.get_all_people()
@@ -373,7 +373,7 @@ async def get_all_people(current_admin: Dict[str, Any] = Depends(get_current_adm
 
 
 @app.get("/people/{person_id}", response_model=Person)
-async def get_person(person_id: int, current_admin: Dict[str, Any] = Depends(get_current_admin)):
+async def get_person(person_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
     """Get a specific person by ID. Requires authentication."""
     try:
         person = await db_manager.get_person_by_id(person_id)
@@ -388,7 +388,7 @@ async def get_person(person_id: int, current_admin: Dict[str, Any] = Depends(get
 
 
 @app.put("/people/{person_id}", response_model=Person)
-async def update_person(person_id: int, person_data: PersonUpdate, current_admin: Dict[str, Any] = Depends(get_current_admin)):
+async def update_person(person_id: int, person_data: PersonUpdate, current_user: Dict[str, Any] = Depends(get_current_user)):
     """Update a person's information. Requires authentication."""
     try:
         updated_person = await db_manager.update_person(person_id, person_data)
@@ -403,7 +403,7 @@ async def update_person(person_id: int, person_data: PersonUpdate, current_admin
 
 
 @app.delete("/people/{person_id}")
-async def delete_person(person_id: int, current_admin: Dict[str, Any] = Depends(get_current_admin)):
+async def delete_person(person_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
     """Delete a person (soft delete by setting active=False). Requires authentication."""
     try:
         success = await db_manager.delete_person(person_id)
@@ -418,7 +418,7 @@ async def delete_person(person_id: int, current_admin: Dict[str, Any] = Depends(
 
 
 @app.get("/celebrations/today", response_model=List[Person])
-async def get_todays_celebrations(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+async def get_todays_celebrations(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Get all people with celebrations today. Requires authentication."""
     try:
         return await date_manager.get_todays_celebrations()
@@ -428,7 +428,7 @@ async def get_todays_celebrations(current_admin: Dict[str, Any] = Depends(get_cu
 
 
 @app.get("/celebrations/{date_str}", response_model=List[Person])
-async def get_celebrations_for_date(date_str: str, current_admin: Dict[str, Any] = Depends(get_current_admin)):
+async def get_celebrations_for_date(date_str: str, current_user: Dict[str, Any] = Depends(get_current_user)):
     """Get all people with celebrations on a specific date (MM-DD format). Requires authentication."""
     try:
         # Validate date format
@@ -444,7 +444,7 @@ async def get_celebrations_for_date(date_str: str, current_admin: Dict[str, Any]
 
 
 @app.post("/upload-csv")
-async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(...), current_admin: Dict[str, Any] = Depends(get_current_admin)):
+async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(...), current_user: Dict[str, Any] = Depends(get_current_user)):
     """Upload and process a CSV file with celebration data using Supabase Storage. Requires authentication."""
     try:
         # Validate file type
@@ -544,7 +544,7 @@ async def test_coordinator_delivery(
 
 
 @app.get("/messages")
-async def get_message_logs(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+async def get_message_logs(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Get all message logs with delivery status. Requires authentication."""
     try:
         messages = await db_manager.get_all_message_logs()
@@ -555,7 +555,7 @@ async def get_message_logs(current_admin: Dict[str, Any] = Depends(get_current_a
 
 
 @app.get("/messages/{message_id}")
-async def get_message_log(message_id: int, current_admin: Dict[str, Any] = Depends(get_current_admin)):
+async def get_message_log(message_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
     """Get a specific message log by ID. Requires authentication."""
     try:
         message = await db_manager.get_message_log_by_id(message_id)
@@ -570,7 +570,7 @@ async def get_message_log(message_id: int, current_admin: Dict[str, Any] = Depen
 
 
 @app.get("/csv-uploads")
-async def get_csv_upload_history(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+async def get_csv_upload_history(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Get the history of all CSV uploads. Requires authentication."""
     try:
         uploads = await db_manager.get_csv_upload_history()
@@ -581,7 +581,7 @@ async def get_csv_upload_history(current_admin: Dict[str, Any] = Depends(get_cur
 
 
 @app.get("/csv-files")
-async def list_csv_files(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+async def list_csv_files(current_user: Dict[str, Any] = Depends(get_current_user)):
     """List all CSV files in Supabase Storage. Requires authentication."""
     try:
         files = await storage_manager.list_csv_files()
@@ -592,7 +592,7 @@ async def list_csv_files(current_admin: Dict[str, Any] = Depends(get_current_adm
 
 
 @app.delete("/csv-files/{file_path:path}")
-async def delete_csv_file(file_path: str, current_admin: Dict[str, Any] = Depends(get_current_admin)):
+async def delete_csv_file(file_path: str, current_user: Dict[str, Any] = Depends(get_current_user)):
     """Delete a CSV file from Supabase Storage. Requires authentication."""
     try:
         success = await storage_manager.delete_csv_file(file_path)
@@ -607,7 +607,7 @@ async def delete_csv_file(file_path: str, current_admin: Dict[str, Any] = Depend
 
 
 @app.get("/scheduler/status")
-async def get_scheduler_status(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+async def get_scheduler_status(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Get the current status of the celebration scheduler. Requires authentication."""
     try:
         return celebration_scheduler.get_status()
@@ -617,7 +617,7 @@ async def get_scheduler_status(current_admin: Dict[str, Any] = Depends(get_curre
 
 
 @app.post("/scheduler/manual-run")
-async def manual_scheduler_run(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+async def manual_scheduler_run(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Manually trigger the celebration scheduler (for testing). Requires authentication."""
     try:
         await celebration_scheduler.run_manual_check()
@@ -855,12 +855,12 @@ async def get_rate_limit_info(
 async def get_ai_wish_audit_logs(
     limit: int = 100,
     offset: int = 0,
-    current_admin: Dict[str, Any] = Depends(get_current_admin)
+    current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
     Get AI wish generation audit logs.
-    
-    This endpoint allows admins to view the audit trail of all AI wish generation requests.
+
+    Returns the audit trail of all AI wish generation requests.
     """
     try:
         audit_logs = await db_manager.get_ai_wish_audit_logs(limit=limit, offset=offset)
@@ -881,7 +881,7 @@ async def get_ai_wish_audit_logs(
 @app.get("/admin/ai-wish-audit-logs/{request_id}")
 async def get_ai_wish_audit_log_by_id(
     request_id: str,
-    current_admin: Dict[str, Any] = Depends(get_current_admin)
+    current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
     Get a specific AI wish audit log by request ID.
@@ -904,7 +904,7 @@ async def get_ai_wish_audit_log_by_id(
 @app.get("/admin/ai-wish-regeneration-chain/{original_request_id}")
 async def get_ai_wish_regeneration_chain(
     original_request_id: str,
-    current_admin: Dict[str, Any] = Depends(get_current_admin)
+    current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
     Get all regenerations for a given original request ID.

@@ -186,19 +186,6 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         )
 
 
-async def get_current_admin(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
-    """
-    Dependency to require an authenticated admin user.
-    """
-    if current_user.get("role") != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required",
-        )
-
-    return current_user
-
-
 async def get_optional_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> Optional[Dict[str, Any]]:
@@ -213,16 +200,3 @@ async def get_optional_current_user(
         return await get_current_user(credentials)
     except HTTPException:
         return None
-
-
-async def get_optional_current_admin(
-    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user)
-) -> Optional[Dict[str, Any]]:
-    """
-    Optional dependency to get the current authenticated admin.
-    Returns None for unauthenticated or non-admin users.
-    """
-    if not current_user or current_user.get("role") != "admin":
-        return None
-
-    return current_user

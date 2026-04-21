@@ -15,8 +15,7 @@ https://your-domain.com/api
 ## Authentication
 
 - **Non-authenticated users**: Can generate wishes but are subject to rate limiting (3 requests per 3 hours per IP)
-- **Authenticated users**: Have unlimited access to wish generation
-- **Admin users**: Full access to all endpoints
+- **Authenticated users**: Have unlimited access to wish generation and full access to management endpoints
 
 ## Rate Limiting
 
