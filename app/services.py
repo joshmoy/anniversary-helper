@@ -426,7 +426,7 @@ class AIMessageGenerator:
                 """
 
             response = self.groq_client.chat.completions.create(
-                model="llama3-8b-8192",
+                model=settings.groq_model,
                 messages=[
                     {"role": "system", "content": "You are a Christian pastor writing celebration messages for church members. Your messages should be warm, godly, and include appropriate Bible verses. Return ONLY the message content without any introductory or closing text."},
                     {"role": "user", "content": prompt}
@@ -469,7 +469,7 @@ class AIMessageGenerator:
                 """
 
             response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model=settings.openai_model,
                 messages=[
                     {"role": "system", "content": "You are a Christian pastor writing celebration messages for church members. Return ONLY the message content without any introductory or closing text."},
                     {"role": "user", "content": prompt}

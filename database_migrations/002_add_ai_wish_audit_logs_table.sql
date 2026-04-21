@@ -30,3 +30,6 @@ COMMENT ON COLUMN ai_wish_audit_logs.request_data IS 'JSON data of the original 
 COMMENT ON COLUMN ai_wish_audit_logs.response_data IS 'JSON data of the generated response';
 COMMENT ON COLUMN ai_wish_audit_logs.ai_service_used IS 'AI service used: groq, openai, or fallback';
 COMMENT ON COLUMN ai_wish_audit_logs.created_at IS 'Timestamp when the request was processed';
+
+
+

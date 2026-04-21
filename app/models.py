@@ -117,6 +117,29 @@ class LoginResponse(BaseModel):
     admin: AdminBase = Field(..., description="Admin user information")
 
 
+class RegisterRequest(BaseModel):
+    """Model for registration requests."""
+    full_name: str = Field(..., description="Full name of the registering user", min_length=1, max_length=255)
+    email: str = Field(
+        ...,
+        description="Email address used as the login username",
+        min_length=3,
+        max_length=255,
+        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+    )
+    password: str = Field(..., description="Password for the new account", min_length=8, max_length=128)
+    account_type: str = Field("personal", description="Account type requested by the client", min_length=1, max_length=50)
+
+
+class RegisterResponse(BaseModel):
+    """Model for registration responses."""
+    message: str = Field(..., description="Registration result message")
+    access_token: str = Field(..., description="JWT access token")
+    token_type: str = Field("bearer", description="Token type")
+    expires_in: int = Field(..., description="Token expiration time in seconds")
+    admin: AdminBase = Field(..., description="Registered admin user information")
+
+
 # Rate Limiting Models
 class RateLimitRecord(BaseModel):
     """Model for tracking API rate limits."""

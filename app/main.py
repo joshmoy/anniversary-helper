@@ -16,7 +16,7 @@ import uvicorn
 from app.config import settings
 from app.database import db_manager
 from app.models import (
-    Person, PersonUpdate, LoginRequest, LoginResponse, AdminBase,
+    Person, PersonUpdate, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, AdminBase,
     AnniversaryWishRequest, AnniversaryWishResponse, RegenerateWishRequest,
     AnniversaryType, ToneType
 )
@@ -218,6 +218,59 @@ async def login(login_data: LoginRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error during login"
+        )
+
+
+@app.post("/auth/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
+async def register(register_data: RegisterRequest):
+    """
+    Register a new admin-backed account.
+
+    The current auth system only stores a username and password hash, so the
+    submitted email is used as the username for future logins.
+    """
+    try:
+        existing_admin = await db_manager.get_admin_by_username(register_data.email)
+        if existing_admin:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An account with this email already exists"
+            )
+
+        password_hash = auth_service.get_password_hash(register_data.password)
+        admin = await db_manager.create_admin(
+            admin_data=AdminBase(username=register_data.email, is_active=True),
+            password_hash=password_hash
+        )
+
+        token_data = {
+            "sub": str(admin.id),
+            "username": admin.username,
+            "type": "access"
+        }
+        access_token = auth_service.create_access_token(token_data)
+
+        logger.info(
+            "Registered new account for %s with account type %s",
+            register_data.email,
+            register_data.account_type,
+        )
+
+        return RegisterResponse(
+            message="Registration successful",
+            access_token=access_token,
+            token_type="bearer",
+            expires_in=settings.jwt_access_token_expire_minutes * 60,
+            admin=AdminBase(username=admin.username, is_active=admin.is_active)
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during registration: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error during registration"
         )
 
 
