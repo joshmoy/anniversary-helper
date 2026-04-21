@@ -69,6 +69,7 @@ class PersonUpdate(BaseModel):
 class Person(PersonBase):
     """Complete person model with database fields."""
     id: int
+    owner_user_id: int = Field(..., description="ID of the user that owns this record")
     created_at: datetime
     updated_at: datetime
 
@@ -79,6 +80,7 @@ class Person(PersonBase):
 class MessageLog(BaseModel):
     """Model for tracking sent messages."""
     id: int
+    owner_user_id: int = Field(..., description="ID of the user that owns this record")
     person_id: int
     message_content: str
     sent_date: date
@@ -93,6 +95,7 @@ class MessageLog(BaseModel):
 class CSVUpload(BaseModel):
     """Model for tracking CSV uploads."""
     id: int
+    owner_user_id: int = Field(..., description="ID of the user that uploaded this CSV")
     filename: str
     upload_date: datetime
     records_processed: int
@@ -352,6 +355,10 @@ class CoordinatorDeliveryTestRequest(BaseModel):
 class AIWishAuditLog(BaseModel):
     """Model for tracking AI wish generation requests and responses."""
     id: int
+    owner_user_id: Optional[int] = Field(
+        None,
+        description="Authenticated user that generated the wish; NULL for anonymous callers",
+    )
     request_id: str = Field(..., description="Unique identifier for this request")
     original_request_id: Optional[str] = Field(None, description="ID of original request if this is a regeneration")
     ip_address: str = Field(..., description="Client IP address (hashed)")
@@ -366,6 +373,10 @@ class AIWishAuditLog(BaseModel):
 
 class AIWishAuditLogCreate(BaseModel):
     """Model for creating new AI wish audit log entries."""
+    owner_user_id: Optional[int] = Field(
+        None,
+        description="Authenticated user that generated the wish; NULL for anonymous callers",
+    )
     request_id: str = Field(..., description="Unique identifier for this request")
     original_request_id: Optional[str] = Field(None, description="ID of original request if this is a regeneration")
     ip_address: str = Field(..., description="Client IP address (hashed)")

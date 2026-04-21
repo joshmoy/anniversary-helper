@@ -147,19 +147,23 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    try:
-        # Check database connection
-        people = await db_manager.get_all_people()
+    """Health check endpoint.
 
-        # Check scheduler status
+    Verifies the database connection with a light metadata probe that is not
+    tenant-scoped, so the endpoint stays usable without authentication.
+    """
+    try:
+        if db_manager.supabase is None:
+            raise Exception("Database not initialized")
+        # Cheap ping that doesn't return tenant data.
+        db_manager.supabase.table("users").select("id").limit(1).execute()
+
         scheduler_status = celebration_scheduler.get_status()
 
         return {
             "status": "healthy",
             "database": "connected",
             "scheduler": scheduler_status,
-            "total_people": len(people)
         }
 
     except Exception as e:
@@ -364,9 +368,9 @@ async def update_current_user_info(
 
 @app.get("/people", response_model=List[Person])
 async def get_all_people(current_user: Dict[str, Any] = Depends(get_current_user)):
-    """Get all people in the database. Requires authentication."""
+    """Get the caller's people."""
     try:
-        return await db_manager.get_all_people()
+        return await db_manager.get_all_people(owner_user_id=current_user["id"])
     except Exception as e:
         logger.error(f"Error getting people: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -374,9 +378,11 @@ async def get_all_people(current_user: Dict[str, Any] = Depends(get_current_user
 
 @app.get("/people/{person_id}", response_model=Person)
 async def get_person(person_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
-    """Get a specific person by ID. Requires authentication."""
+    """Get one of the caller's people by ID."""
     try:
-        person = await db_manager.get_person_by_id(person_id)
+        person = await db_manager.get_person_by_id(
+            person_id, owner_user_id=current_user["id"]
+        )
         if not person:
             raise HTTPException(status_code=404, detail="Person not found")
         return person
@@ -389,9 +395,11 @@ async def get_person(person_id: int, current_user: Dict[str, Any] = Depends(get_
 
 @app.put("/people/{person_id}", response_model=Person)
 async def update_person(person_id: int, person_data: PersonUpdate, current_user: Dict[str, Any] = Depends(get_current_user)):
-    """Update a person's information. Requires authentication."""
+    """Update one of the caller's people."""
     try:
-        updated_person = await db_manager.update_person(person_id, person_data)
+        updated_person = await db_manager.update_person(
+            person_id, person_data, owner_user_id=current_user["id"]
+        )
         if not updated_person:
             raise HTTPException(status_code=404, detail="Person not found")
         return updated_person
@@ -404,9 +412,11 @@ async def update_person(person_id: int, person_data: PersonUpdate, current_user:
 
 @app.delete("/people/{person_id}")
 async def delete_person(person_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
-    """Delete a person (soft delete by setting active=False). Requires authentication."""
+    """Soft-delete one of the caller's people."""
     try:
-        success = await db_manager.delete_person(person_id)
+        success = await db_manager.delete_person(
+            person_id, owner_user_id=current_user["id"]
+        )
         if not success:
             raise HTTPException(status_code=404, detail="Person not found")
         return {"message": "Person deleted successfully"}
@@ -419,9 +429,9 @@ async def delete_person(person_id: int, current_user: Dict[str, Any] = Depends(g
 
 @app.get("/celebrations/today", response_model=List[Person])
 async def get_todays_celebrations(current_user: Dict[str, Any] = Depends(get_current_user)):
-    """Get all people with celebrations today. Requires authentication."""
+    """Get today's celebrations for the caller."""
     try:
-        return await date_manager.get_todays_celebrations()
+        return await date_manager.get_todays_celebrations(owner_user_id=current_user["id"])
     except Exception as e:
         logger.error(f"Error getting today's celebrations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -429,13 +439,14 @@ async def get_todays_celebrations(current_user: Dict[str, Any] = Depends(get_cur
 
 @app.get("/celebrations/{date_str}", response_model=List[Person])
 async def get_celebrations_for_date(date_str: str, current_user: Dict[str, Any] = Depends(get_current_user)):
-    """Get all people with celebrations on a specific date (MM-DD format). Requires authentication."""
+    """Get celebrations for ``date_str`` (MM-DD) scoped to the caller."""
     try:
-        # Validate date format
         if len(date_str) != 5 or date_str[2] != '-':
             raise HTTPException(status_code=400, detail="Date must be in MM-DD format")
 
-        return await db_manager.get_people_by_date(date_str)
+        return await db_manager.get_people_by_date(
+            date_str, owner_user_id=current_user["id"]
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -445,28 +456,27 @@ async def get_celebrations_for_date(date_str: str, current_user: Dict[str, Any] 
 
 @app.post("/upload-csv")
 async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(...), current_user: Dict[str, Any] = Depends(get_current_user)):
-    """Upload and process a CSV file with celebration data using Supabase Storage. Requires authentication."""
+    """Upload a CSV; its rows land in the caller's people set."""
     try:
-        # Validate file type
         if not file.filename.endswith('.csv'):
             raise HTTPException(status_code=400, detail="File must be a CSV")
 
-        # Read file content
         file_content = await file.read()
 
-        # Upload to Supabase Storage
-        upload_result = await storage_manager.upload_csv_file(file_content, file.filename)
-        
+        upload_result = await storage_manager.upload_csv_file(
+            file_content, file.filename, owner_user_id=current_user["id"]
+        )
+
         if not upload_result["success"]:
             raise HTTPException(
                 status_code=500, 
                 detail=f"Failed to upload file to storage: {upload_result.get('error', 'Unknown error')}"
             )
 
-        # Process CSV in background
         background_tasks.add_task(
-            process_csv_background, 
-            upload_result["file_path"]
+            process_csv_background,
+            upload_result["file_path"],
+            current_user["id"],
         )
 
         return {
@@ -482,10 +492,10 @@ async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def process_csv_background(file_path: str):
-    """Background task to process CSV file from Supabase Storage."""
+async def process_csv_background(file_path: str, owner_user_id: int):
+    """Background task to process an owner's CSV upload."""
     try:
-        result = await csv_manager.process_csv_file(file_path)
+        result = await csv_manager.process_csv_file(file_path, owner_user_id=owner_user_id)
         logger.info(f"CSV processing completed: {result}")
     except Exception as e:
         logger.error(f"Error processing CSV in background: {e}")
@@ -545,10 +555,9 @@ async def test_coordinator_delivery(
 
 @app.get("/messages")
 async def get_message_logs(current_user: Dict[str, Any] = Depends(get_current_user)):
-    """Get all message logs with delivery status. Requires authentication."""
+    """Get the caller's message logs."""
     try:
-        messages = await db_manager.get_all_message_logs()
-        return messages
+        return await db_manager.get_all_message_logs(owner_user_id=current_user["id"])
     except Exception as e:
         logger.error(f"Error getting message logs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -556,9 +565,11 @@ async def get_message_logs(current_user: Dict[str, Any] = Depends(get_current_us
 
 @app.get("/messages/{message_id}")
 async def get_message_log(message_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
-    """Get a specific message log by ID. Requires authentication."""
+    """Get one of the caller's message logs by ID."""
     try:
-        message = await db_manager.get_message_log_by_id(message_id)
+        message = await db_manager.get_message_log_by_id(
+            message_id, owner_user_id=current_user["id"]
+        )
         if not message:
             raise HTTPException(status_code=404, detail="Message not found")
         return message
@@ -571,10 +582,9 @@ async def get_message_log(message_id: int, current_user: Dict[str, Any] = Depend
 
 @app.get("/csv-uploads")
 async def get_csv_upload_history(current_user: Dict[str, Any] = Depends(get_current_user)):
-    """Get the history of all CSV uploads. Requires authentication."""
+    """Get the caller's CSV upload history."""
     try:
-        uploads = await db_manager.get_csv_upload_history()
-        return uploads
+        return await db_manager.get_csv_upload_history(owner_user_id=current_user["id"])
     except Exception as e:
         logger.error(f"Error getting CSV upload history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -582,9 +592,9 @@ async def get_csv_upload_history(current_user: Dict[str, Any] = Depends(get_curr
 
 @app.get("/csv-files")
 async def list_csv_files(current_user: Dict[str, Any] = Depends(get_current_user)):
-    """List all CSV files in Supabase Storage. Requires authentication."""
+    """List the caller's CSV files in storage."""
     try:
-        files = await storage_manager.list_csv_files()
+        files = await storage_manager.list_csv_files(owner_user_id=current_user["id"])
         return {"files": files}
     except Exception as e:
         logger.error(f"Error listing CSV files: {e}")
@@ -593,9 +603,11 @@ async def list_csv_files(current_user: Dict[str, Any] = Depends(get_current_user
 
 @app.delete("/csv-files/{file_path:path}")
 async def delete_csv_file(file_path: str, current_user: Dict[str, Any] = Depends(get_current_user)):
-    """Delete a CSV file from Supabase Storage. Requires authentication."""
+    """Delete one of the caller's CSV files from storage."""
     try:
-        success = await storage_manager.delete_csv_file(file_path)
+        success = await storage_manager.delete_csv_file(
+            file_path, owner_user_id=current_user["id"]
+        )
         if not success:
             raise HTTPException(status_code=404, detail="File not found or could not be deleted")
         return {"message": "File deleted successfully"}
@@ -702,10 +714,12 @@ async def generate_anniversary_wish(
 
         # Generate a unique request ID
         request_id = str(uuid.uuid4())
-        
+
+        owner_user_id = current_user["id"] if current_user else None
+
         # Generate the anniversary wish with audit logging
         generated_wish = await ai_wish_generator.generate_anniversary_wish(
-            request, request_id, ip_address
+            request, request_id, ip_address, owner_user_id=owner_user_id
         )
         
         # Prepare response
@@ -764,8 +778,14 @@ async def regenerate_anniversary_wish(
                 "request_count": 0
             }
 
-        # Get the original request from audit logs
-        original_audit_log = await db_manager.get_ai_wish_audit_log_by_request_id(request.request_id)
+        owner_user_id = current_user["id"] if current_user else None
+
+        # Look up the original request. Authenticated callers are scoped to
+        # their own request history; anonymous callers can still regenerate by
+        # id (the generated wish is not returned unless the original exists).
+        original_audit_log = await db_manager.get_ai_wish_audit_log_by_request_id(
+            request.request_id, owner_user_id=owner_user_id
+        )
         
         if not original_audit_log:
             raise HTTPException(
@@ -777,12 +797,15 @@ async def regenerate_anniversary_wish(
         original_request_data = original_audit_log.request_data
         original_request = AnniversaryWishRequest(**original_request_data)
         
-        # Generate new request ID for regeneration
         new_request_id = str(uuid.uuid4())
-        
-        # Regenerate the wish with audit logging
+
         generated_wish = await ai_wish_generator.regenerate_wish(
-            original_request, request.request_id, new_request_id, ip_address, request.additional_context
+            original_request,
+            request.request_id,
+            new_request_id,
+            ip_address,
+            request.additional_context,
+            owner_user_id=owner_user_id,
         )
         
         # Prepare response
@@ -863,7 +886,9 @@ async def get_ai_wish_audit_logs(
     Returns the audit trail of all AI wish generation requests.
     """
     try:
-        audit_logs = await db_manager.get_ai_wish_audit_logs(limit=limit, offset=offset)
+        audit_logs = await db_manager.get_ai_wish_audit_logs(
+            limit=limit, offset=offset, owner_user_id=current_user["id"]
+        )
         return {
             "audit_logs": audit_logs,
             "total_returned": len(audit_logs),
@@ -887,7 +912,9 @@ async def get_ai_wish_audit_log_by_id(
     Get a specific AI wish audit log by request ID.
     """
     try:
-        audit_log = await db_manager.get_ai_wish_audit_log_by_request_id(request_id)
+        audit_log = await db_manager.get_ai_wish_audit_log_by_request_id(
+            request_id, owner_user_id=current_user["id"]
+        )
         if not audit_log:
             raise HTTPException(status_code=404, detail="Audit log not found")
         return audit_log
@@ -910,7 +937,9 @@ async def get_ai_wish_regeneration_chain(
     Get all regenerations for a given original request ID.
     """
     try:
-        regeneration_chain = await db_manager.get_ai_wish_regeneration_chain(original_request_id)
+        regeneration_chain = await db_manager.get_ai_wish_regeneration_chain(
+            original_request_id, owner_user_id=current_user["id"]
+        )
         return {
             "original_request_id": original_request_id,
             "regenerations": regeneration_chain,

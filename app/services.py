@@ -42,12 +42,21 @@ class StorageManager:
             # Fallback to regular client
             self.storage_client = db_manager.supabase
         
-    async def upload_csv_file(self, file_content: bytes, filename: str) -> Dict[str, Any]:
-        """Upload a CSV file to Supabase Storage."""
+    async def upload_csv_file(
+        self,
+        file_content: bytes,
+        filename: str,
+        *,
+        owner_user_id: int,
+    ) -> Dict[str, Any]:
+        """Upload a CSV file to Supabase Storage under the owner's prefix.
+
+        The object path embeds ``owner_user_id`` so listing/deleting can be
+        scoped to the caller by prefix.
+        """
         try:
-            # Generate a unique file path with timestamp
             timestamp = datetime.now().isoformat()
-            file_path = f"uploads/{timestamp}_{filename}"
+            file_path = f"uploads/{owner_user_id}/{timestamp}_{filename}"
             
             # Upload to Supabase Storage
             response = self.storage_client.storage.from_(self.bucket_name).upload(
@@ -101,19 +110,32 @@ class StorageManager:
             logger.error(f"Error downloading file from storage: {e}")
             raise
     
-    async def delete_csv_file(self, file_path: str) -> bool:
-        """Delete a CSV file from Supabase Storage."""
+    async def delete_csv_file(self, file_path: str, *, owner_user_id: int) -> bool:
+        """Delete a CSV file only if it lives under this user's prefix.
+
+        Rejects paths that don't start with ``uploads/{owner_user_id}/`` so one
+        user can't delete another user's object by guessing the path.
+        """
+        expected_prefix = f"uploads/{owner_user_id}/"
+        if not file_path.startswith(expected_prefix):
+            logger.warning(
+                "Refusing cross-tenant delete: user %s tried to delete %s",
+                owner_user_id,
+                file_path,
+            )
+            return False
         try:
             response = self.storage_client.storage.from_(self.bucket_name).remove([file_path])
             return response.status_code == 200
         except Exception as e:
             logger.error(f"Error deleting file from storage: {e}")
             return False
-    
-    async def list_csv_files(self) -> List[Dict]:
-        """List all CSV files in the storage bucket."""
+
+    async def list_csv_files(self, *, owner_user_id: int) -> List[Dict]:
+        """List CSV files owned by ``owner_user_id``."""
         try:
-            response = self.storage_client.storage.from_(self.bucket_name).list("uploads/")
+            prefix = f"uploads/{owner_user_id}"
+            response = self.storage_client.storage.from_(self.bucket_name).list(prefix)
             return response if response else []
         except Exception as e:
             logger.error(f"Error listing files from storage: {e}")
@@ -153,8 +175,8 @@ class CSVManager:
 
         return errors
 
-    async def process_csv_file(self, file_path: str) -> Dict[str, Any]:
-        """Process a CSV file from Supabase Storage and import data to database."""
+    async def process_csv_file(self, file_path: str, *, owner_user_id: int) -> Dict[str, Any]:
+        """Process a CSV file from Supabase Storage into the owner's row set."""
         try:
             # Download file from Supabase Storage
             file_content = await storage_manager.download_csv_file(file_path)
@@ -176,10 +198,15 @@ class CSVManager:
             records_added = 0
             records_updated = 0
 
+            # Load this user's existing people once, outside the loop.
+            existing_people = await db_manager.get_all_people(owner_user_id=owner_user_id)
+            existing_by_key = {
+                (p.name, p.event_type): p for p in existing_people
+            }
+
             # Process each row
             for index, row in df.iterrows():
                 try:
-                    # Clean and prepare data
                     name = str(row['name']).strip()
                     event_type = EventType(row['type'].lower().strip())
                     event_date = str(row['date']).strip()
@@ -187,7 +214,6 @@ class CSVManager:
                     spouse = str(row['spouse']).strip() if pd.notna(row.get('spouse')) and row.get('spouse') != '' else None
                     phone_number = str(row['phone_number']).strip() if pd.notna(row.get('phone_number')) and row.get('phone_number') != '' else None
 
-                    # Create person data
                     person_data = PersonCreate(
                         name=name,
                         event_type=event_type,
@@ -198,15 +224,9 @@ class CSVManager:
                         active=True
                     )
 
-                    # Check if this is an update or new record
-                    existing_people = await db_manager.get_all_people()
-                    existing_person = next(
-                        (p for p in existing_people if p.name == name and p.event_type == event_type),
-                        None
-                    )
+                    existing_person = existing_by_key.get((name, event_type))
 
-                    # Upsert person
-                    await db_manager.upsert_person(person_data)
+                    await db_manager.upsert_person(person_data, owner_user_id=owner_user_id)
 
                     if existing_person:
                         records_updated += 1
@@ -225,7 +245,8 @@ class CSVManager:
                     records_added=records_added,
                     records_updated=records_updated,
                     success=True,
-                    storage_path=file_path
+                    storage_path=file_path,
+                    owner_user_id=owner_user_id,
                 )
             except Exception as log_error:
                 logger.error(f"Failed to log CSV upload: {log_error}")
@@ -249,7 +270,8 @@ class CSVManager:
                     records_updated=0,
                     success=False,
                     error_message=str(e),
-                    storage_path=file_path
+                    storage_path=file_path,
+                    owner_user_id=owner_user_id,
                 )
             except Exception as log_error:
                 logger.error(f"Failed to log CSV upload error: {log_error}")
@@ -277,15 +299,20 @@ class DateManager:
         """Convert a date object to MM-DD format."""
         return target_date.strftime("%m-%d")
 
-    async def get_todays_celebrations(self) -> List[Person]:
-        """Get all people who have birthdays or anniversaries today."""
+    async def get_todays_celebrations(self, *, owner_user_id: int) -> List[Person]:
+        """Get today's celebrations for ``owner_user_id``."""
         today_string = self.get_today_date_string()
-        return await db_manager.get_people_by_date(today_string)
+        return await db_manager.get_people_by_date(today_string, owner_user_id=owner_user_id)
 
-    async def get_celebrations_for_date(self, target_date: date) -> List[Person]:
-        """Get all people who have birthdays or anniversaries on a specific date."""
+    async def get_celebrations_for_date(
+        self,
+        target_date: date,
+        *,
+        owner_user_id: int,
+    ) -> List[Person]:
+        """Get celebrations on ``target_date`` for ``owner_user_id``."""
         date_string = self.get_date_string(target_date)
-        return await db_manager.get_people_by_date(date_string)
+        return await db_manager.get_people_by_date(date_string, owner_user_id=owner_user_id)
 
     @staticmethod
     def calculate_age_or_years(person: Person) -> Optional[int]:
@@ -762,7 +789,14 @@ class CoordinatorNotifier:
         """Send a test message to the current user."""
         return await self.send_message_to_user(user, message, subject=subject)
 
-    async def send_message_to_contact(self, person: Person, channel: str, message: str) -> Dict[str, Any]:
+    async def send_message_to_contact(
+        self,
+        person: Person,
+        channel: str,
+        message: str,
+        *,
+        owner_user_id: int,
+    ) -> Dict[str, Any]:
         """Send a message directly to a person's configured contact details."""
         try:
             if channel in {"sms", "whatsapp"}:
@@ -777,7 +811,8 @@ class CoordinatorNotifier:
                 message_content=message,
                 sent_date=date.today(),
                 success=result["success"],
-                error_message=result.get("error")
+                error_message=result.get("error"),
+                owner_user_id=owner_user_id,
             )
             return result
 
@@ -787,7 +822,8 @@ class CoordinatorNotifier:
                 message_content=message,
                 sent_date=date.today(),
                 success=False,
-                error_message=str(e)
+                error_message=str(e),
+                owner_user_id=owner_user_id,
             )
             return {
                 "success": False,
@@ -800,7 +836,12 @@ class CoordinatorNotifier:
         try:
             message = await ai_generator.generate_celebration_message(person)
             channel = user.direct_message_channel.value if hasattr(user.direct_message_channel, "value") else str(user.direct_message_channel)
-            return await self.send_message_to_contact(person, channel, message)
+            return await self.send_message_to_contact(
+                person,
+                channel,
+                message,
+                owner_user_id=user.id,
+            )
         except Exception as e:
             logger.error("Error sending direct celebration message for %s: %s", person.name, e)
             return {
@@ -811,7 +852,7 @@ class CoordinatorNotifier:
     async def send_daily_celebrations_for_user(self, user: User) -> Dict[str, Any]:
         """Send daily celebrations according to a single user's preference."""
         try:
-            celebrations = await date_manager.get_todays_celebrations()
+            celebrations = await date_manager.get_todays_celebrations(owner_user_id=user.id)
             if not celebrations:
                 logger.info("No celebrations today")
                 return {
@@ -846,7 +887,8 @@ class CoordinatorNotifier:
                     message_content=consolidated_message,
                     sent_date=date.today(),
                     success=result["success"],
-                    error_message=result.get("error")
+                    error_message=result.get("error"),
+                    owner_user_id=user.id,
                 )
 
             if result["success"]:
