@@ -15,6 +15,7 @@ This directory contains SQL migration scripts for the Church Anniversary & Birth
 
 - `001_add_rate_limiting_table.sql` - Creates the rate_limiting table for API rate limiting functionality
 - `002_add_ai_wish_audit_logs_table.sql` - Creates the ai_wish_audit_logs table for AI wish generation audit trail
+- `003_create_users_table_and_migrate_admins.sql` - Creates the users table and migrates legacy admin accounts into role-based users
 
 ## Migration Order
 

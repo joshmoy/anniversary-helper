@@ -123,50 +123,62 @@ class AuthenticationService:
 auth_service = AuthenticationService()
 
 
-async def get_current_admin(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
     """
-    Dependency to get the current authenticated admin.
-    This will be used to protect routes that require authentication.
+    Dependency to get the current authenticated user.
     """
     try:
+        if not credentials:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
         # Verify the token
         payload = auth_service.verify_token(credentials.credentials)
         
-        # Extract admin info from token
-        admin_id_str: str = payload.get("sub")
-        if admin_id_str is None:
+        user_id_str: str = payload.get("sub")
+        if user_id_str is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token missing admin ID",
+                detail="Token missing user ID",
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
         try:
-            admin_id = int(admin_id_str)
+            user_id = int(user_id_str)
         except (ValueError, TypeError):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid admin ID in token",
+                detail="Invalid user ID in token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
         username: str = payload.get("username")
-        if username is None:
+        email: Optional[str] = payload.get("email")
+        role: str = payload.get("role")
+        account_type: str = payload.get("account_type")
+
+        if username is None or role is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token missing username",
+                detail="Token missing required user fields",
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
         return {
-            "id": admin_id,
-            "username": username
+            "id": user_id,
+            "username": username,
+            "email": email,
+            "role": role,
+            "account_type": account_type,
         }
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting current admin: {e}")
+        logger.error(f"Error getting current user: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
@@ -174,17 +186,43 @@ async def get_current_admin(credentials: HTTPAuthorizationCredentials = Depends(
         )
 
 
-async def get_optional_current_admin(
+async def get_current_admin(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    Dependency to require an authenticated admin user.
+    """
+    if current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+
+    return current_user
+
+
+async def get_optional_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> Optional[Dict[str, Any]]:
     """
-    Optional dependency to get the current authenticated admin.
+    Optional dependency to get the current authenticated user.
     Returns None if no valid token is provided.
     """
     if not credentials:
         return None
     
     try:
-        return await get_current_admin(credentials)
+        return await get_current_user(credentials)
     except HTTPException:
         return None
+
+
+async def get_optional_current_admin(
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user)
+) -> Optional[Dict[str, Any]]:
+    """
+    Optional dependency to get the current authenticated admin.
+    Returns None for unauthenticated or non-admin users.
+    """
+    if not current_user or current_user.get("role") != "admin":
+        return None
+
+    return current_user

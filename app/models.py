@@ -13,6 +13,18 @@ class EventType(str, Enum):
     ANNIVERSARY = "anniversary"
 
 
+class UserRole(str, Enum):
+    """Authorization roles for authenticated users."""
+    ADMIN = "admin"
+    MEMBER = "member"
+
+
+class AccountType(str, Enum):
+    """Supported account types for users."""
+    PERSONAL = "personal"
+    ORGANIZATION = "organization"
+
+
 class PersonBase(BaseModel):
     """Base model for person data."""
     name: str = Field(..., description="Full name of the person")
@@ -80,19 +92,29 @@ class CSVUpload(BaseModel):
         from_attributes = True
 
 
-class AdminBase(BaseModel):
-    """Base model for admin data."""
-    username: str = Field(..., description="Admin username")
-    is_active: bool = Field(True, description="Whether this admin account is active")
+class UserBase(BaseModel):
+    """Base model for authenticated user data."""
+    username: str = Field(..., description="Unique username", min_length=3, max_length=50)
+    email: Optional[str] = Field(
+        None,
+        description="Unique email address",
+        min_length=3,
+        max_length=255,
+        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+    )
+    full_name: str = Field(..., description="User's full name", min_length=1, max_length=255)
+    account_type: AccountType = Field(AccountType.PERSONAL, description="Type of account")
+    role: UserRole = Field(UserRole.MEMBER, description="Authorization role")
+    is_active: bool = Field(True, description="Whether this user account is active")
 
 
-class AdminCreate(AdminBase):
-    """Model for creating a new admin."""
+class UserCreate(UserBase):
+    """Model for creating a new user."""
     password: str = Field(..., description="Plain text password (will be hashed)")
 
 
-class Admin(AdminBase):
-    """Complete admin model with database fields."""
+class User(UserBase):
+    """Complete user model with database fields."""
     id: int
     password_hash: str = Field(..., description="Hashed password")
     created_at: datetime
@@ -105,8 +127,14 @@ class Admin(AdminBase):
 
 class LoginRequest(BaseModel):
     """Model for login requests."""
-    username: str = Field(..., description="Admin username")
-    password: str = Field(..., description="Admin password")
+    email: str = Field(
+        ...,
+        description="Email address for login",
+        min_length=3,
+        max_length=255,
+        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+    )
+    password: str = Field(..., description="Account password")
 
 
 class LoginResponse(BaseModel):
@@ -114,21 +142,22 @@ class LoginResponse(BaseModel):
     access_token: str = Field(..., description="JWT access token")
     token_type: str = Field("bearer", description="Token type")
     expires_in: int = Field(..., description="Token expiration time in seconds")
-    admin: AdminBase = Field(..., description="Admin user information")
+    user: UserBase = Field(..., description="Authenticated user information")
 
 
 class RegisterRequest(BaseModel):
     """Model for registration requests."""
     full_name: str = Field(..., description="Full name of the registering user", min_length=1, max_length=255)
+    username: str = Field(..., description="Unique username", min_length=3, max_length=50)
     email: str = Field(
         ...,
-        description="Email address used as the login username",
+        description="Email address for the account",
         min_length=3,
         max_length=255,
         pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
     )
     password: str = Field(..., description="Password for the new account", min_length=8, max_length=128)
-    account_type: str = Field("personal", description="Account type requested by the client", min_length=1, max_length=50)
+    account_type: AccountType = Field(AccountType.PERSONAL, description="Account type requested by the client")
 
 
 class RegisterResponse(BaseModel):
@@ -137,7 +166,7 @@ class RegisterResponse(BaseModel):
     access_token: str = Field(..., description="JWT access token")
     token_type: str = Field("bearer", description="Token type")
     expires_in: int = Field(..., description="Token expiration time in seconds")
-    admin: AdminBase = Field(..., description="Registered admin user information")
+    user: UserBase = Field(..., description="Registered user information")
 
 
 # Rate Limiting Models

@@ -16,13 +16,13 @@ import uvicorn
 from app.config import settings
 from app.database import db_manager
 from app.models import (
-    Person, PersonUpdate, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, AdminBase,
+    Person, PersonUpdate, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, UserBase, UserCreate, UserRole,
     AnniversaryWishRequest, AnniversaryWishResponse, RegenerateWishRequest,
     AnniversaryType, ToneType
 )
 from app.services import csv_manager, date_manager, whatsapp_messenger, storage_manager
 from app.scheduler import celebration_scheduler
-from app.auth import auth_service, get_current_admin, get_optional_current_admin
+from app.auth import auth_service, get_current_admin, get_current_user, get_optional_current_user
 from app.rate_limiter import rate_limit_service
 from app.ai_wish_generator import ai_wish_generator
 
@@ -88,7 +88,7 @@ app = FastAPI(
     
     ## Authentication
     
-    * Admin endpoints require JWT authentication
+    * Admin endpoints require admin role JWT authentication
     * Anniversary wish endpoints work without authentication (with rate limiting)
     * Authenticated users have unlimited access to wish generation
     """,
@@ -160,55 +160,60 @@ async def health_check():
 @app.post("/auth/login", response_model=LoginResponse)
 async def login(login_data: LoginRequest):
     """
-    Admin login endpoint.
+    User login endpoint.
     
-    Creates a session token for authenticated admin users.
+    Creates a session token for authenticated users.
     """
     try:
-        # Get admin by username
-        admin = await db_manager.get_admin_by_username(login_data.username)
+        user = await db_manager.get_user_by_email(login_data.email)
         
-        if not admin:
-            logger.warning(f"Login attempt with invalid username: {login_data.username}")
+        if not user:
+            logger.warning(f"Login attempt with invalid email: {login_data.email}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid username or password"
+                detail="Invalid email or password"
             )
         
-        # Check if admin is active
-        if not admin.is_active:
-            logger.warning(f"Login attempt with inactive admin: {login_data.username}")
+        if not user.is_active:
+            logger.warning(f"Login attempt with inactive user: {login_data.email}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Account is deactivated"
             )
         
-        # Verify password
-        if not auth_service.verify_password(login_data.password, admin.password_hash):
-            logger.warning(f"Login attempt with invalid password for user: {login_data.username}")
+        if not auth_service.verify_password(login_data.password, user.password_hash):
+            logger.warning(f"Login attempt with invalid password for user: {login_data.email}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid username or password"
+                detail="Invalid email or password"
             )
         
-        # Update last login timestamp
-        await db_manager.update_admin_last_login(admin.id)
+        await db_manager.update_user_last_login(user.id)
         
-        # Create access token
         token_data = {
-            "sub": str(admin.id),  # JWT sub must be a string
-            "username": admin.username,
+            "sub": str(user.id),
+            "username": user.username,
+            "email": user.email,
+            "role": user.role.value if hasattr(user.role, "value") else user.role,
+            "account_type": user.account_type.value if hasattr(user.account_type, "value") else user.account_type,
             "type": "access"
         }
         access_token = auth_service.create_access_token(token_data)
         
-        logger.info(f"Successful login for admin: {admin.username}")
+        logger.info(f"Successful login for user: {user.username}")
         
         return LoginResponse(
             access_token=access_token,
             token_type="bearer",
-            expires_in=settings.jwt_access_token_expire_minutes * 60,  # Convert to seconds
-            admin=AdminBase(username=admin.username, is_active=admin.is_active)
+            expires_in=settings.jwt_access_token_expire_minutes * 60,
+            user=UserBase(
+                username=user.username,
+                email=user.email,
+                full_name=user.full_name,
+                account_type=user.account_type,
+                role=user.role,
+                is_active=user.is_active,
+            )
         )
         
     except HTTPException:
@@ -224,28 +229,43 @@ async def login(login_data: LoginRequest):
 @app.post("/auth/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
 async def register(register_data: RegisterRequest):
     """
-    Register a new admin-backed account.
-
-    The current auth system only stores a username and password hash, so the
-    submitted email is used as the username for future logins.
+    Register a new user account.
     """
     try:
-        existing_admin = await db_manager.get_admin_by_username(register_data.email)
-        if existing_admin:
+        existing_username = await db_manager.get_user_by_username(register_data.username)
+        if existing_username:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An account with this username already exists"
+            )
+
+        existing_email = await db_manager.get_user_by_email(register_data.email)
+        if existing_email:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="An account with this email already exists"
             )
 
         password_hash = auth_service.get_password_hash(register_data.password)
-        admin = await db_manager.create_admin(
-            admin_data=AdminBase(username=register_data.email, is_active=True),
+        user = await db_manager.create_user(
+            user_data=UserCreate(
+                username=register_data.username,
+                email=register_data.email,
+                full_name=register_data.full_name,
+                account_type=register_data.account_type,
+                role=UserRole.MEMBER,
+                is_active=True,
+                password=register_data.password,
+            ),
             password_hash=password_hash
         )
 
         token_data = {
-            "sub": str(admin.id),
-            "username": admin.username,
+            "sub": str(user.id),
+            "username": user.username,
+            "email": user.email,
+            "role": user.role.value if hasattr(user.role, "value") else user.role,
+            "account_type": user.account_type.value if hasattr(user.account_type, "value") else user.account_type,
             "type": "access"
         }
         access_token = auth_service.create_access_token(token_data)
@@ -261,7 +281,14 @@ async def register(register_data: RegisterRequest):
             access_token=access_token,
             token_type="bearer",
             expires_in=settings.jwt_access_token_expire_minutes * 60,
-            admin=AdminBase(username=admin.username, is_active=admin.is_active)
+            user=UserBase(
+                username=user.username,
+                email=user.email,
+                full_name=user.full_name,
+                account_type=user.account_type,
+                role=user.role,
+                is_active=user.is_active,
+            )
         )
 
     except HTTPException:
@@ -274,27 +301,34 @@ async def register(register_data: RegisterRequest):
         )
 
 
-@app.get("/auth/me", response_model=AdminBase)
-async def get_current_admin_info(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+@app.get("/auth/me", response_model=UserBase)
+async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_current_user)):
     """
-    Get current authenticated admin information.
+    Get current authenticated user information.
     
     This endpoint can be used to verify authentication tokens.
     """
     try:
-        admin = await db_manager.get_admin_by_id(current_admin["id"])
-        if not admin:
+        user = await db_manager.get_user_by_id(current_user["id"])
+        if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Admin not found"
+                detail="User not found"
             )
         
-        return AdminBase(username=admin.username, is_active=admin.is_active)
+        return UserBase(
+            username=user.username,
+            email=user.email,
+            full_name=user.full_name,
+            account_type=user.account_type,
+            role=user.role,
+            is_active=user.is_active,
+        )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting current admin info: {e}")
+        logger.error(f"Error getting current user info: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"
@@ -538,7 +572,7 @@ async def manual_scheduler_run(current_admin: Dict[str, Any] = Depends(get_curre
 async def generate_anniversary_wish(
     request: AnniversaryWishRequest,
     http_request: Request,
-    current_admin: Optional[Dict[str, Any]] = Depends(get_optional_current_admin)
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user)
 ):
     """
     Generate a personalized AI-powered anniversary wish.
@@ -588,7 +622,7 @@ async def generate_anniversary_wish(
         ip_address = rate_limit_service.extract_ip_address(http_request)
         
         # Check rate limits for non-authenticated users
-        if not current_admin:
+        if not current_user:
             is_allowed, rate_info = await rate_limit_service.check_rate_limit(ip_address)
             
             if not is_allowed:
@@ -639,7 +673,7 @@ async def generate_anniversary_wish(
 async def regenerate_anniversary_wish(
     request: RegenerateWishRequest,
     http_request: Request,
-    current_admin: Optional[Dict[str, Any]] = Depends(get_optional_current_admin)
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user)
 ):
     """
     Regenerate an anniversary wish with additional context.
@@ -652,7 +686,7 @@ async def regenerate_anniversary_wish(
         ip_address = rate_limit_service.extract_ip_address(http_request)
         
         # Check rate limits for non-authenticated users
-        if not current_admin:
+        if not current_user:
             is_allowed, rate_info = await rate_limit_service.check_rate_limit(ip_address)
             
             if not is_allowed:
@@ -715,7 +749,7 @@ async def regenerate_anniversary_wish(
 @app.get("/api/anniversary-wish/rate-limit-info")
 async def get_rate_limit_info(
     http_request: Request,
-    current_admin: Optional[Dict[str, Any]] = Depends(get_optional_current_admin)
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user)
 ):
     """
     Get current rate limit information for the requesting IP address.
@@ -745,7 +779,7 @@ async def get_rate_limit_info(
         
         return {
             "ip_address": ip_address,
-            "is_authenticated": current_admin is not None,
+            "is_authenticated": current_user is not None,
             "rate_limit_info": rate_info
         }
         

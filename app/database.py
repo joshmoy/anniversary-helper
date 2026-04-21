@@ -6,7 +6,7 @@ from datetime import datetime, date, timedelta
 from typing import List, Optional, Dict, Any
 from supabase import create_client, Client
 from app.config import settings
-from app.models import Person, PersonCreate, PersonUpdate, MessageLog, CSVUpload, Admin, AdminCreate, RateLimitRecord, AIWishAuditLog, AIWishAuditLogCreate
+from app.models import Person, PersonCreate, PersonUpdate, MessageLog, CSVUpload, User, UserCreate, RateLimitRecord, AIWishAuditLog, AIWishAuditLogCreate
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +79,16 @@ class DatabaseManager:
             );
             """
 
-            # Create admins table
-            admins_table = """
-            CREATE TABLE IF NOT EXISTS admins (
+            # Create users table
+            users_table = """
+            CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
                 username VARCHAR(100) UNIQUE NOT NULL,
+                email VARCHAR(255) UNIQUE,
+                full_name VARCHAR(255) NOT NULL,
                 password_hash VARCHAR(255) NOT NULL,
+                account_type VARCHAR(50) NOT NULL DEFAULT 'personal',
+                role VARCHAR(20) NOT NULL DEFAULT 'member',
                 is_active BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -413,78 +417,106 @@ class DatabaseManager:
             logger.error(f"Error getting CSV upload history: {e}")
             raise
 
-    # Admin Management Methods
+    # User Management Methods
 
-    async def create_admin(self, admin_data: AdminCreate, password_hash: str) -> Admin:
-        """Create a new admin user."""
+    async def create_user(self, user_data: UserCreate, password_hash: str) -> User:
+        """Create a new user."""
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
             data = {
-                "username": admin_data.username,
+                "username": user_data.username,
+                "email": user_data.email,
+                "full_name": user_data.full_name,
                 "password_hash": password_hash,
-                "is_active": admin_data.is_active
+                "account_type": user_data.account_type.value,
+                "role": user_data.role.value,
+                "is_active": user_data.is_active
             }
 
-            result = self.supabase.table("admins").insert(data).execute()
+            result = self.supabase.table("users").insert(data).execute()
 
             if result.data:
-                return Admin(**result.data[0])
+                return User(**result.data[0])
             else:
-                raise Exception("Failed to create admin")
+                raise Exception("Failed to create user")
 
         except Exception as e:
-            logger.error(f"Error creating admin: {e}")
+            logger.error(f"Error creating user: {e}")
             raise
 
-    async def get_admin_by_username(self, username: str) -> Optional[Admin]:
-        """Get an admin by username."""
+    async def get_user_by_username(self, username: str) -> Optional[User]:
+        """Get a user by username."""
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
-            result = self.supabase.table("admins").select("*").eq("username", username).execute()
+            result = self.supabase.table("users").select("*").eq("username", username).execute()
 
             if result.data and len(result.data) > 0:
-                return Admin(**result.data[0])
+                return User(**result.data[0])
             return None
 
         except Exception as e:
-            logger.error(f"Error getting admin by username {username}: {e}")
+            logger.error(f"Error getting user by username {username}: {e}")
             raise
 
-    async def get_admin_by_id(self, admin_id: int) -> Optional[Admin]:
-        """Get an admin by ID."""
+    async def get_user_by_email(self, email: str) -> Optional[User]:
+        """Get a user by email."""
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
-            result = self.supabase.table("admins").select("*").eq("id", admin_id).execute()
+            result = self.supabase.table("users").select("*").eq("email", email).execute()
 
             if result.data and len(result.data) > 0:
-                return Admin(**result.data[0])
+                return User(**result.data[0])
             return None
 
         except Exception as e:
-            logger.error(f"Error getting admin by ID {admin_id}: {e}")
+            logger.error(f"Error getting user by email {email}: {e}")
             raise
 
-    async def update_admin_last_login(self, admin_id: int) -> bool:
-        """Update admin's last login timestamp."""
+    async def get_user_by_login_identifier(self, login: str) -> Optional[User]:
+        """Get a user by username or email."""
+        user = await self.get_user_by_username(login)
+        if user:
+            return user
+
+        return await self.get_user_by_email(login)
+
+    async def get_user_by_id(self, user_id: int) -> Optional[User]:
+        """Get a user by ID."""
         if not self.supabase:
             raise Exception("Database not initialized")
 
         try:
-            result = self.supabase.table("admins").update({
+            result = self.supabase.table("users").select("*").eq("id", user_id).execute()
+
+            if result.data and len(result.data) > 0:
+                return User(**result.data[0])
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting user by ID {user_id}: {e}")
+            raise
+
+    async def update_user_last_login(self, user_id: int) -> bool:
+        """Update user's last login timestamp."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            result = self.supabase.table("users").update({
                 "last_login": datetime.now().isoformat(),
                 "updated_at": datetime.now().isoformat()
-            }).eq("id", admin_id).execute()
+            }).eq("id", user_id).execute()
 
             return result.data and len(result.data) > 0
 
         except Exception as e:
-            logger.error(f"Error updating admin last login {admin_id}: {e}")
+            logger.error(f"Error updating user last login {user_id}: {e}")
             raise
 
     # Rate Limiting Methods
