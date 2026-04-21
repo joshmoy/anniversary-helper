@@ -17,7 +17,7 @@ from app.config import settings
 from app.database import db_manager
 from app.models import (
     Person, PersonUpdate, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, UserBase, UserCreate, UserRole,
-    AnniversaryWishRequest, AnniversaryWishResponse, RegenerateWishRequest,
+    AnniversaryWishRequest, AnniversaryWishResponse, RegenerateWishRequest, CoordinatorDeliveryTestRequest, UserProfileUpdate,
     AnniversaryType, ToneType
 )
 from app.services import csv_manager, date_manager, coordinator_notifier, storage_manager
@@ -32,6 +32,22 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def build_user_response(user) -> UserBase:
+    """Build the standard user response payload."""
+    return UserBase(
+        username=user.username,
+        email=user.email,
+        full_name=user.full_name,
+        phone_number=getattr(user, "phone_number", None),
+        account_type=user.account_type,
+        role=user.role,
+        notification_preference=user.notification_preference,
+        notification_channels=user.notification_channels,
+        direct_message_channel=user.direct_message_channel,
+        is_active=user.is_active,
+    )
 
 
 @asynccontextmanager
@@ -206,14 +222,7 @@ async def login(login_data: LoginRequest):
             access_token=access_token,
             token_type="bearer",
             expires_in=settings.jwt_access_token_expire_minutes * 60,
-            user=UserBase(
-                username=user.username,
-                email=user.email,
-                full_name=user.full_name,
-                account_type=user.account_type,
-                role=user.role,
-                is_active=user.is_active,
-            )
+            user=build_user_response(user)
         )
         
     except HTTPException:
@@ -252,8 +261,12 @@ async def register(register_data: RegisterRequest):
                 username=register_data.username,
                 email=register_data.email,
                 full_name=register_data.full_name,
+                phone_number=register_data.phone_number,
                 account_type=register_data.account_type,
                 role=UserRole.MEMBER,
+                notification_preference=register_data.notification_preference,
+                notification_channels=register_data.notification_channels,
+                direct_message_channel=register_data.direct_message_channel,
                 is_active=True,
                 password=register_data.password,
             ),
@@ -281,14 +294,7 @@ async def register(register_data: RegisterRequest):
             access_token=access_token,
             token_type="bearer",
             expires_in=settings.jwt_access_token_expire_minutes * 60,
-            user=UserBase(
-                username=user.username,
-                email=user.email,
-                full_name=user.full_name,
-                account_type=user.account_type,
-                role=user.role,
-                is_active=user.is_active,
-            )
+            user=build_user_response(user)
         )
 
     except HTTPException:
@@ -316,19 +322,40 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
                 detail="User not found"
             )
         
-        return UserBase(
-            username=user.username,
-            email=user.email,
-            full_name=user.full_name,
-            account_type=user.account_type,
-            role=user.role,
-            is_active=user.is_active,
-        )
+        return build_user_response(user)
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting current user info: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
+
+
+@app.put("/auth/me", response_model=UserBase)
+async def update_current_user_info(
+    profile_data: UserProfileUpdate,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Update the current user's profile and delivery preferences.
+    """
+    try:
+        user = await db_manager.update_user_profile(current_user["id"], profile_data)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+
+        return build_user_response(user)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating current user info: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"
@@ -473,13 +500,46 @@ async def cron_hook(x_cron_secret: str | None = Header(None)):
 
 
 @app.post("/send-celebrations")
-async def send_daily_celebrations(current_admin: Dict[str, Any] = Depends(get_current_admin)):
-    """Manually trigger sending celebration messages for today. Requires authentication."""
+async def send_daily_celebrations(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Manually trigger today's celebration delivery for the current user."""
     try:
-        result = await coordinator_notifier.send_daily_celebrations()
+        user = await db_manager.get_user_by_id(current_user["id"])
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        result = await coordinator_notifier.send_daily_celebrations_for_user(user)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error sending celebrations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/test-coordinator-delivery")
+async def test_coordinator_delivery(
+    test_request: CoordinatorDeliveryTestRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Send a test notification to the current user's configured channels."""
+    try:
+        user = await db_manager.get_user_by_id(current_user["id"])
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        subject = test_request.subject or "Coordinator delivery test"
+        message = test_request.message or (
+            "This is a test coordinator notification from the Church Anniversary & Birthday Helper.\n\n"
+            "If you received this, your configured delivery channel is working."
+        )
+
+        result = await coordinator_notifier.send_test_message_to_user(user, message, subject=subject)
+        return {
+            "message": "Coordinator delivery test completed",
+            **result,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error sending coordinator delivery test: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -18,7 +18,7 @@ import requests
 from twilio.rest import Client as TwilioClient
 
 from app.database import db_manager
-from app.models import PersonCreate, EventType, Person
+from app.models import PersonCreate, EventType, Person, User, NotificationPreference
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -569,53 +569,42 @@ class AIMessageGenerator:
 
 
 class CoordinatorNotifier:
-    """Sends generated celebration messages to a coordinator over one or more channels."""
+    """Sends generated celebration messages based on a user's delivery preferences."""
 
     def __init__(self):
         """Initialize Twilio client."""
         self.client = None
 
         try:
-            self.client = TwilioClient(
-                settings.twilio_account_sid,
-                settings.twilio_auth_token
-            )
-            logger.info("Twilio client initialized successfully")
+            if settings.twilio_account_sid and settings.twilio_auth_token:
+                self.client = TwilioClient(
+                    settings.twilio_account_sid,
+                    settings.twilio_auth_token
+                )
+                logger.info("Twilio client initialized successfully")
+            else:
+                logger.info("Twilio credentials not configured; SMS and WhatsApp delivery will be unavailable")
         except Exception as e:
             logger.error(f"Failed to initialize Twilio client: {e}")
 
-    def _get_enabled_channels(self) -> List[str]:
-        """Return the enabled coordinator delivery channels."""
-        raw_channels = settings.coordinator_channels.strip()
-        if raw_channels:
-            channels = [channel.strip().lower() for channel in raw_channels.split(",") if channel.strip()]
-        else:
-            channels = [settings.coordinator_delivery_channel.strip().lower()]
-
+    def _get_user_channels(self, user: User) -> List[str]:
+        """Return enabled personal reminder channels for a user."""
+        channels = [channel.value if hasattr(channel, "value") else str(channel) for channel in user.notification_channels]
         unique_channels: List[str] = []
         for channel in channels:
             if channel not in unique_channels:
                 unique_channels.append(channel)
-
         if not unique_channels:
-            raise ValueError("Set COORDINATOR_CHANNELS to at least one channel")
-
+            raise ValueError("User must configure at least one notification channel")
         return unique_channels
 
-    def _get_phone_recipient(self) -> str:
-        """Return the configured phone recipient for SMS or WhatsApp delivery."""
-        phone_recipient = settings.coordinator_phone or settings.coordinator_to or settings.whatsapp_to
-        if not phone_recipient:
-            raise ValueError("Set COORDINATOR_PHONE or COORDINATOR_TO for phone-based delivery")
-        return phone_recipient
-
-    def _resolve_twilio_routing(self, channel: str) -> Dict[str, str]:
+    def _resolve_twilio_routing(self, channel: str, recipient: str) -> Dict[str, str]:
         """Resolve Twilio sender/recipient settings for SMS or WhatsApp delivery."""
-        to_value = self._get_phone_recipient()
+        to_value = recipient
 
         if channel == "whatsapp":
             if not settings.whatsapp_from:
-                raise ValueError("WHATSAPP_FROM must be set when using coordinator WhatsApp delivery")
+                raise ValueError("WHATSAPP_FROM must be set when using WhatsApp delivery")
 
             if not to_value.startswith("whatsapp:"):
                 to_value = f"whatsapp:{to_value}"
@@ -624,15 +613,15 @@ class CoordinatorNotifier:
 
         if channel == "sms":
             if not settings.sms_from:
-                raise ValueError("SMS_FROM must be set when using coordinator SMS delivery")
+                raise ValueError("SMS_FROM must be set when using SMS delivery")
 
             return {"channel": channel, "from": settings.sms_from, "to": to_value}
 
         raise ValueError(f"Unsupported Twilio channel: {channel}")
 
-    def _send_via_twilio(self, channel: str, message: str) -> Dict[str, Any]:
-        """Send a coordinator message through Twilio."""
-        routing = self._resolve_twilio_routing(channel)
+    def _send_via_twilio(self, channel: str, recipient: str, message: str) -> Dict[str, Any]:
+        """Send a message through Twilio."""
+        routing = self._resolve_twilio_routing(channel, recipient)
         message_instance = self.client.messages.create(
             body=message,
             from_=routing["from"],
@@ -652,10 +641,8 @@ class CoordinatorNotifier:
             "status": message_instance.status,
         }
 
-    def _send_via_email(self, subject: str, message: str) -> Dict[str, Any]:
-        """Send a coordinator message by email using SMTP."""
-        if not settings.coordinator_email:
-            raise ValueError("COORDINATOR_EMAIL must be set when using email delivery")
+    def _send_via_email(self, recipient_email: str, subject: str, message: str) -> Dict[str, Any]:
+        """Send a message by email using SMTP."""
         if not settings.smtp_host:
             raise ValueError("SMTP_HOST must be set when using email delivery")
         if not settings.smtp_from_email:
@@ -664,7 +651,7 @@ class CoordinatorNotifier:
         email_message = EmailMessage()
         email_message["Subject"] = subject
         email_message["From"] = settings.smtp_from_email
-        email_message["To"] = settings.coordinator_email
+        email_message["To"] = recipient_email
         email_message.set_content(message)
 
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as smtp:
@@ -674,15 +661,15 @@ class CoordinatorNotifier:
                 smtp.login(settings.smtp_username, settings.smtp_password)
             smtp.send_message(email_message)
 
-        logger.info("Coordinator message sent successfully via email to %s", settings.coordinator_email)
+        logger.info("Coordinator message sent successfully via email to %s", recipient_email)
         return {
             "success": True,
             "channel": "email",
-            "to": settings.coordinator_email,
+            "to": recipient_email,
         }
 
     def _send_via_telegram(self, message: str) -> Dict[str, Any]:
-        """Send a coordinator message to Telegram using a bot."""
+        """Send a message to Telegram using a bot."""
         if not settings.telegram_bot_token:
             raise ValueError("TELEGRAM_BOT_TOKEN must be set when using telegram delivery")
         if not settings.telegram_chat_id:
@@ -706,38 +693,47 @@ class CoordinatorNotifier:
             "message_id": payload.get("result", {}).get("message_id"),
         }
 
-    def _send_to_channel(self, channel: str, subject: str, message: str) -> Dict[str, Any]:
-        """Send the message to a single coordinator channel."""
+    def _send_to_channel(self, channel: str, recipient: Optional[str], subject: str, message: str) -> Dict[str, Any]:
+        """Send the message to a single channel."""
         if channel in {"sms", "whatsapp"}:
             if not self.client:
                 raise ValueError("Twilio client not initialized")
-            return self._send_via_twilio(channel, message)
+            if not recipient:
+                raise ValueError(f"A recipient phone number is required for {channel} delivery")
+            return self._send_via_twilio(channel, recipient, message)
         if channel == "email":
-            return self._send_via_email(subject, message)
+            if not recipient:
+                raise ValueError("A recipient email is required for email delivery")
+            return self._send_via_email(recipient, subject, message)
         if channel == "telegram":
             return self._send_via_telegram(message)
         raise ValueError(f"Unsupported coordinator channel: {channel}")
 
-    async def send_message(self, message: str, subject: Optional[str] = None) -> Dict[str, Any]:
-        """Send a message to the configured coordinator channels."""
-        if not self.client:
-            twilio_required = any(channel in {"sms", "whatsapp"} for channel in self._get_enabled_channels())
-            if twilio_required:
-                return {
-                    "success": False,
-                    "error": "Twilio client not initialized"
-                }
+    async def send_message_to_user(self, user: User, message: str, subject: Optional[str] = None) -> Dict[str, Any]:
+        """Send a message to a user's configured personal reminder channels."""
+        channels = self._get_user_channels(user)
+        if not self.client and any(channel in {"sms", "whatsapp"} for channel in channels):
+            return {
+                "success": False,
+                "error": "Twilio client not initialized"
+            }
 
         try:
             delivery_subject = subject or "Daily celebration message"
             results = []
             failed_channels = []
 
-            for channel in self._get_enabled_channels():
+            for channel in channels:
+                recipient = None
+                if channel in {"sms", "whatsapp"}:
+                    recipient = user.phone_number
+                elif channel == "email":
+                    recipient = user.email
+
                 try:
-                    results.append(self._send_to_channel(channel, delivery_subject, message))
+                    results.append(self._send_to_channel(channel, recipient, delivery_subject, message))
                 except Exception as channel_error:
-                    logger.error("Error sending coordinator message via %s: %s", channel, channel_error)
+                    logger.error("Error sending user message via %s for user %s: %s", channel, user.id, channel_error)
                     results.append({
                         "success": False,
                         "channel": channel,
@@ -762,16 +758,20 @@ class CoordinatorNotifier:
                 "error": str(e)
             }
 
-    async def send_celebration_message(self, person: Person) -> Dict[str, Any]:
-        """Generate and send a celebration message for a person."""
+    async def send_test_message_to_user(self, user: User, message: str, subject: Optional[str] = None) -> Dict[str, Any]:
+        """Send a test message to the current user."""
+        return await self.send_message_to_user(user, message, subject=subject)
+
+    async def send_message_to_contact(self, person: Person, channel: str, message: str) -> Dict[str, Any]:
+        """Send a message directly to a person's configured contact details."""
         try:
-            # Generate the message
-            message = await ai_generator.generate_celebration_message(person)
+            if channel in {"sms", "whatsapp"}:
+                if not person.phone_number:
+                    raise ValueError(f"{person.name} does not have a phone number configured")
+                result = self._send_to_channel(channel, person.phone_number, f"Celebrating {person.name}", message)
+            else:
+                raise ValueError(f"Direct delivery channel {channel} is not supported for contacts yet")
 
-            # Send the message
-            result = await self.send_message(message)
-
-            # Log the message attempt
             await db_manager.log_message(
                 person_id=person.id,
                 message_content=message,
@@ -779,32 +779,39 @@ class CoordinatorNotifier:
                 success=result["success"],
                 error_message=result.get("error")
             )
-
             return result
 
         except Exception as e:
-            logger.error(f"Error sending celebration message for {person.name}: {e}")
-
-            # Log the failed attempt
             await db_manager.log_message(
                 person_id=person.id,
-                message_content="",
+                message_content=message,
                 sent_date=date.today(),
                 success=False,
                 error_message=str(e)
             )
+            return {
+                "success": False,
+                "channel": channel,
+                "error": str(e)
+            }
 
+    async def send_direct_celebration_message(self, user: User, person: Person) -> Dict[str, Any]:
+        """Generate and send a celebration message directly to a contact."""
+        try:
+            message = await ai_generator.generate_celebration_message(person)
+            channel = user.direct_message_channel.value if hasattr(user.direct_message_channel, "value") else str(user.direct_message_channel)
+            return await self.send_message_to_contact(person, channel, message)
+        except Exception as e:
+            logger.error("Error sending direct celebration message for %s: %s", person.name, e)
             return {
                 "success": False,
                 "error": str(e)
             }
 
-    async def send_daily_celebrations(self) -> Dict[str, Any]:
-        """Send a single consolidated message for all people with events today."""
+    async def send_daily_celebrations_for_user(self, user: User) -> Dict[str, Any]:
+        """Send daily celebrations according to a single user's preference."""
         try:
-            # Get today's celebrations
             celebrations = await date_manager.get_todays_celebrations()
-
             if not celebrations:
                 logger.info("No celebrations today")
                 return {
@@ -813,14 +820,26 @@ class CoordinatorNotifier:
                     "sent_count": 0
                 }
 
-            # Generate consolidated message
+            if user.notification_preference == NotificationPreference.DIRECT_TO_CONTACTS:
+                results = []
+                for person in celebrations:
+                    results.append(await self.send_direct_celebration_message(user, person))
+
+                success_count = sum(1 for result in results if result.get("success"))
+                return {
+                    "success": success_count > 0,
+                    "sent_count": success_count,
+                    "failed_count": len(results) - success_count,
+                    "errors": [result.get("error", "Unknown error") for result in results if not result.get("success")],
+                    "total_celebrations": len(celebrations),
+                    "message": "Direct celebration delivery completed",
+                    "channels": [user.direct_message_channel.value if hasattr(user.direct_message_channel, "value") else str(user.direct_message_channel)]
+                }
+
             consolidated_message = await self.generate_consolidated_celebration_message(celebrations)
             subject = f"Daily celebration message for {date.today().isoformat()}"
+            result = await self.send_message_to_user(user, consolidated_message, subject=subject)
 
-            # Send the single consolidated message
-            result = await self.send_message(consolidated_message, subject=subject)
-
-            # Log the message attempt for all people
             for person in celebrations:
                 await db_manager.log_message(
                     person_id=person.id,
@@ -831,32 +850,28 @@ class CoordinatorNotifier:
                 )
 
             if result["success"]:
-                logger.info(
-                    f"Sent consolidated celebration message for {len(celebrations)} people "
-                    f"to coordinator via {', '.join(result.get('successful_channels', []))}"
-                )
                 return {
                     "success": True,
-                    "sent_count": 1,  # One consolidated message
+                    "sent_count": 1,
                     "failed_count": 0,
                     "errors": [],
                     "total_celebrations": len(celebrations),
-                    "message": "Consolidated celebration message sent to coordinator successfully",
+                    "message": "Personal daily reminder sent successfully",
                     "channels": result.get("successful_channels", [])
                 }
-            else:
-                logger.error(f"Failed to send consolidated message: {result}")
-                return {
-                    "success": False,
-                    "sent_count": 0,
-                    "failed_count": len(result.get("failed_channels", [])) or 1,
-                    "errors": [
-                        delivery_result.get("error", "Unknown error")
-                        for delivery_result in result.get("results", [])
-                        if not delivery_result.get("success")
-                    ] or ["Unknown error"],
-                    "total_celebrations": len(celebrations)
-                }
+
+            logger.error(f"Failed to send consolidated message: {result}")
+            return {
+                "success": False,
+                "sent_count": 0,
+                "failed_count": len(result.get("failed_channels", [])) or 1,
+                "errors": [
+                    delivery_result.get("error", "Unknown error")
+                    for delivery_result in result.get("results", [])
+                    if not delivery_result.get("success")
+                ] or ["Unknown error"],
+                "total_celebrations": len(celebrations)
+            }
 
         except Exception as e:
             logger.error(f"Error in daily celebrations: {e}")
@@ -865,6 +880,54 @@ class CoordinatorNotifier:
                 "error": str(e),
                 "sent_count": 0
             }
+
+    async def send_daily_celebrations(self) -> Dict[str, Any]:
+        """Run daily celebration delivery for all active users."""
+        users = await db_manager.get_active_users()
+        if not users:
+            return {
+                "success": True,
+                "message": "No active users configured for reminders",
+                "sent_count": 0,
+            }
+
+        direct_delivery_users = [
+            user for user in users
+            if user.notification_preference == NotificationPreference.DIRECT_TO_CONTACTS
+        ]
+        personal_reminder_users = [
+            user for user in users
+            if user.notification_preference == NotificationPreference.PERSONAL_REMINDER
+        ]
+
+        results = []
+
+        for user in personal_reminder_users:
+            results.append({
+                "user_id": user.id,
+                "username": user.username,
+                "result": await self.send_daily_celebrations_for_user(user),
+            })
+
+        if direct_delivery_users:
+            selected_user = direct_delivery_users[0]
+            if len(direct_delivery_users) > 1:
+                logger.warning(
+                    "Multiple users are configured for direct-to-contacts delivery; using user %s only",
+                    selected_user.id
+                )
+            results.append({
+                "user_id": selected_user.id,
+                "username": selected_user.username,
+                "result": await self.send_daily_celebrations_for_user(selected_user),
+            })
+
+        return {
+            "success": any(item["result"].get("success") for item in results),
+            "sent_count": sum(item["result"].get("sent_count", 0) for item in results),
+            "failed_count": sum(item["result"].get("failed_count", 0) for item in results),
+            "results": results,
+        }
 
     async def generate_consolidated_celebration_message(self, celebrations: List[Person]) -> str:
         """Generate a single consolidated message for all today's celebrations."""

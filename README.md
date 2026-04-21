@@ -1,13 +1,13 @@
 # Church Anniversary & Birthday Helper
 
-An automated system that reads monthly CSV data to detect birthdays and anniversaries, generates Christian-themed celebration messages using AI, and sends the finished message to a coordinator daily across flexible delivery channels for manual posting to WhatsApp.
+An automated system that reads monthly CSV data to detect birthdays and anniversaries, generates Christian-themed celebration messages using AI, and either sends a personal daily reminder to each user or delivers celebration messages directly to recipient contacts.
 
 ## Features
 
 - 📅 **Daily Automated Checks**: Automatically checks for birthdays/anniversaries each day
 - 📊 **CSV Data Management**: Easy monthly data uploads via CSV files
 - 🤖 **AI-Generated Messages**: Creates personalized Christian messages with Bible verses
-- 📱 **Coordinator Delivery**: Sends the daily message to one coordinator by SMS, email, WhatsApp, or Telegram
+- 📱 **Flexible Delivery**: Each user can choose a personal daily reminder or direct delivery to recipient contacts
 - ⛪ **Christian-Themed**: All messages are crafted with godly content and biblical references
 - 💰 **Cost-Effective**: Designed to run on free/low-cost infrastructure
 
@@ -86,13 +86,12 @@ All configuration is done through environment variables:
 - `SUPABASE_KEY`: Your Supabase anon/public key
 - `TWILIO_ACCOUNT_SID`: Twilio account SID
 - `TWILIO_AUTH_TOKEN`: Twilio auth token
-- `COORDINATOR_CHANNELS`: Comma-separated channels such as `sms,email`
-- `COORDINATOR_PHONE`: Coordinator phone number for `sms` or `whatsapp`
-- `COORDINATOR_EMAIL`: Coordinator email address for `email`
 - `SMS_FROM`: Your Twilio SMS-enabled number when using SMS delivery
 - `WHATSAPP_FROM`: Your Twilio WhatsApp number when using WhatsApp delivery
 - `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM_EMAIL`: SMTP settings for email delivery
 - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`: Telegram bot settings for Telegram delivery
+
+Users configure their own `phone_number`, `notification_preference`, `notification_channels`, and `direct_message_channel` through the app profile endpoints instead of environment variables.
 - `SCHEDULE_TIME`: Daily check time (default: "09:00")
 
 ## Auth Hashing without Passlib
@@ -131,6 +130,37 @@ If you're upgrading from a version that used Passlib:
 - Existing bcrypt hashes (e.g., `$2b$...`, `$2a$...`, `$2y$...`) continue to work
 - No database schema changes required
 - Compatible with Python 3.12 on Railway
+
+## Database Migrations
+
+Schema changes are managed with the [Supabase CLI](https://supabase.com/docs/guides/cli).
+All migration SQL lives under [`supabase/migrations/`](supabase/migrations/)
+and is applied manually via the `make` targets defined in [`Makefile`](Makefile).
+
+```bash
+# Against a running local stack (spun up with `make db-start`)
+make db-reset
+
+# Against the linked remote Supabase project
+export SUPABASE_ACCESS_TOKEN=... SUPABASE_PROJECT_REF=... SUPABASE_DB_PASSWORD=...
+make db-migrate
+```
+
+Common targets (run `make help` for the full list):
+
+| Command | Purpose |
+| ------- | ------- |
+| `make db-start` / `db-stop` | Start / stop the local Supabase stack. |
+| `make db-reset` | Re-apply every migration against the local stack. |
+| `make db-link` | Link the repo to a remote Supabase project (reads `SUPABASE_PROJECT_REF`). |
+| `make db-push` | Push migrations to the already-linked remote project. |
+| `make db-migrate` | Link (using `SUPABASE_*` env vars) and push in one step. |
+| `make db-new NAME=<name>` | Create a new empty migration file. |
+| `make db-diff NAME=<name>` | Generate a migration from local schema changes. |
+| `make db-list` | List local vs remote migration status. |
+
+See [`supabase/migrations/README.md`](supabase/migrations/README.md) for the
+full list of migrations and instructions for adding new ones.
 
 ## Deployment
 

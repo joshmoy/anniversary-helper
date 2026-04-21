@@ -6,13 +6,81 @@ from datetime import datetime, date, timedelta
 from typing import List, Optional, Dict, Any
 from supabase import create_client, Client
 from app.config import settings
-from app.models import Person, PersonCreate, PersonUpdate, MessageLog, CSVUpload, User, UserCreate, RateLimitRecord, AIWishAuditLog, AIWishAuditLogCreate
+from app.models import (
+    Person,
+    PersonCreate,
+    PersonUpdate,
+    MessageLog,
+    CSVUpload,
+    User,
+    UserCreate,
+    UserProfileUpdate,
+    RateLimitRecord,
+    AIWishAuditLog,
+    AIWishAuditLogCreate,
+    NotificationChannel,
+    NotificationPreference,
+    NotificationPreferencesUpdate,
+)
+
+DEFAULT_NOTIFICATION_PREFERENCE = NotificationPreference.PERSONAL_REMINDER.value
+DEFAULT_NOTIFICATION_CHANNELS = [NotificationChannel.SMS.value, NotificationChannel.EMAIL.value]
+DEFAULT_DIRECT_MESSAGE_CHANNEL = NotificationChannel.SMS.value
 
 logger = logging.getLogger(__name__)
 
 
 class DatabaseManager:
     """Manages database operations with Supabase."""
+
+    @staticmethod
+    def _serialize_notification_channels(channels: List[NotificationChannel | str]) -> str:
+        """Serialize a list of notification channels for database storage."""
+        return ",".join(
+            channel.value if isinstance(channel, NotificationChannel) else str(channel)
+            for channel in channels
+        )
+
+    @staticmethod
+    def _parse_notification_channels(value: Any) -> List[str]:
+        """Parse notification_channels from a DB value into a list of strings."""
+        if isinstance(value, list):
+            return [str(channel) for channel in value if channel]
+        if isinstance(value, str) and value:
+            return [channel for channel in value.split(",") if channel]
+        return list(DEFAULT_NOTIFICATION_CHANNELS)
+
+    @classmethod
+    def _merge_preferences(
+        cls,
+        user_record: Dict[str, Any],
+        preferences_record: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Combine a raw users row with its notification preferences row.
+
+        The API's ``User`` model expects preference fields alongside identity
+        fields, but they are stored in the separate
+        ``user_notification_preferences`` table. This merges them for model
+        construction, defaulting when no preferences row exists yet.
+        """
+        merged = dict(user_record)
+        if preferences_record:
+            merged["notification_preference"] = (
+                preferences_record.get("notification_preference")
+                or DEFAULT_NOTIFICATION_PREFERENCE
+            )
+            merged["notification_channels"] = cls._parse_notification_channels(
+                preferences_record.get("notification_channels")
+            )
+            merged["direct_message_channel"] = (
+                preferences_record.get("direct_message_channel")
+                or DEFAULT_DIRECT_MESSAGE_CHANNEL
+            )
+        else:
+            merged["notification_preference"] = DEFAULT_NOTIFICATION_PREFERENCE
+            merged["notification_channels"] = list(DEFAULT_NOTIFICATION_CHANNELS)
+            merged["direct_message_channel"] = DEFAULT_DIRECT_MESSAGE_CHANNEL
+        return merged
 
     def __init__(self):
         """Initialize Supabase client."""
@@ -52,6 +120,7 @@ class DatabaseManager:
                 event_date VARCHAR(5) NOT NULL,
                 year INTEGER,
                 spouse VARCHAR(255),
+                phone_number VARCHAR(30),
                 active BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -85,13 +154,15 @@ class DatabaseManager:
             );
             """
 
-            # Create users table
+            # Create users table (identity only; delivery prefs live in
+            # user_notification_preferences).
             users_table = """
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
                 username VARCHAR(100) UNIQUE NOT NULL,
                 email VARCHAR(255) UNIQUE,
                 full_name VARCHAR(255) NOT NULL,
+                phone_number VARCHAR(30),
                 password_hash VARCHAR(255) NOT NULL,
                 account_type VARCHAR(50) NOT NULL DEFAULT 'personal',
                 role VARCHAR(20) NOT NULL DEFAULT 'member',
@@ -99,6 +170,19 @@ class DatabaseManager:
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                 last_login TIMESTAMP WITH TIME ZONE
+            );
+            """
+
+            # Create user_notification_preferences table
+            user_notification_preferences_table = """
+            CREATE TABLE IF NOT EXISTS user_notification_preferences (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                notification_preference VARCHAR(50) NOT NULL DEFAULT 'personal_reminder',
+                notification_channels VARCHAR(255) NOT NULL DEFAULT 'sms,email',
+                direct_message_channel VARCHAR(50) NOT NULL DEFAULT 'sms',
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
             );
             """
 
@@ -425,8 +509,82 @@ class DatabaseManager:
 
     # User Management Methods
 
+    async def _get_notification_preferences(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Fetch the raw notification preferences row for a user, if any."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        result = (
+            self.supabase.table("user_notification_preferences")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        if result.data and len(result.data) > 0:
+            return result.data[0]
+        return None
+
+    async def _upsert_notification_preferences(
+        self,
+        user_id: int,
+        *,
+        notification_preference: Optional[str] = None,
+        notification_channels: Optional[str] = None,
+        direct_message_channel: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Insert or update a user's notification preferences row.
+
+        Unspecified fields use table defaults on insert and are left alone on
+        update.
+        """
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        existing = await self._get_notification_preferences(user_id)
+        now_iso = datetime.now().isoformat()
+
+        if existing:
+            update_data: Dict[str, Any] = {"updated_at": now_iso}
+            if notification_preference is not None:
+                update_data["notification_preference"] = notification_preference
+            if notification_channels is not None:
+                update_data["notification_channels"] = notification_channels
+            if direct_message_channel is not None:
+                update_data["direct_message_channel"] = direct_message_channel
+            if len(update_data) == 1:  # only updated_at changed
+                return existing
+            result = (
+                self.supabase.table("user_notification_preferences")
+                .update(update_data)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            if result.data:
+                return result.data[0]
+            return {**existing, **update_data}
+
+        insert_data: Dict[str, Any] = {
+            "user_id": user_id,
+            "notification_preference": notification_preference or DEFAULT_NOTIFICATION_PREFERENCE,
+            "notification_channels": notification_channels or ",".join(DEFAULT_NOTIFICATION_CHANNELS),
+            "direct_message_channel": direct_message_channel or DEFAULT_DIRECT_MESSAGE_CHANNEL,
+        }
+        result = (
+            self.supabase.table("user_notification_preferences")
+            .insert(insert_data)
+            .execute()
+        )
+        if result.data:
+            return result.data[0]
+        raise Exception("Failed to create user notification preferences")
+
+    async def _build_user(self, user_record: Dict[str, Any]) -> User:
+        """Load notification preferences and construct a User model."""
+        preferences = await self._get_notification_preferences(user_record["id"])
+        return User(**self._merge_preferences(user_record, preferences))
+
     async def create_user(self, user_data: UserCreate, password_hash: str) -> User:
-        """Create a new user."""
+        """Create a new user and its notification preferences row."""
         if not self.supabase:
             raise Exception("Database not initialized")
 
@@ -435,18 +593,28 @@ class DatabaseManager:
                 "username": user_data.username,
                 "email": user_data.email,
                 "full_name": user_data.full_name,
+                "phone_number": user_data.phone_number,
                 "password_hash": password_hash,
                 "account_type": user_data.account_type.value,
                 "role": user_data.role.value,
-                "is_active": user_data.is_active
+                "is_active": user_data.is_active,
             }
 
             result = self.supabase.table("users").insert(data).execute()
 
-            if result.data:
-                return User(**result.data[0])
-            else:
+            if not result.data:
                 raise Exception("Failed to create user")
+
+            user_record = result.data[0]
+
+            await self._upsert_notification_preferences(
+                user_record["id"],
+                notification_preference=user_data.notification_preference.value,
+                notification_channels=self._serialize_notification_channels(user_data.notification_channels),
+                direct_message_channel=user_data.direct_message_channel.value,
+            )
+
+            return await self._build_user(user_record)
 
         except Exception as e:
             logger.error(f"Error creating user: {e}")
@@ -461,7 +629,7 @@ class DatabaseManager:
             result = self.supabase.table("users").select("*").eq("username", username).execute()
 
             if result.data and len(result.data) > 0:
-                return User(**result.data[0])
+                return await self._build_user(result.data[0])
             return None
 
         except Exception as e:
@@ -477,7 +645,7 @@ class DatabaseManager:
             result = self.supabase.table("users").select("*").eq("email", email).execute()
 
             if result.data and len(result.data) > 0:
-                return User(**result.data[0])
+                return await self._build_user(result.data[0])
             return None
 
         except Exception as e:
@@ -501,7 +669,7 @@ class DatabaseManager:
             result = self.supabase.table("users").select("*").eq("id", user_id).execute()
 
             if result.data and len(result.data) > 0:
-                return User(**result.data[0])
+                return await self._build_user(result.data[0])
             return None
 
         except Exception as e:
@@ -523,6 +691,86 @@ class DatabaseManager:
 
         except Exception as e:
             logger.error(f"Error updating user last login {user_id}: {e}")
+            raise
+
+    async def update_user_profile(self, user_id: int, user_data: UserProfileUpdate) -> Optional[User]:
+        """Update user profile and notification preference fields.
+
+        Identity fields (``full_name``, ``phone_number``) live on the users
+        table while delivery preferences live on
+        ``user_notification_preferences``.
+        """
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            identity_update: Dict[str, Any] = {}
+            if user_data.full_name is not None:
+                identity_update["full_name"] = user_data.full_name
+            if user_data.phone_number is not None:
+                identity_update["phone_number"] = user_data.phone_number
+
+            if identity_update:
+                identity_update["updated_at"] = datetime.now().isoformat()
+                self.supabase.table("users").update(identity_update).eq("id", user_id).execute()
+
+            touches_preferences = (
+                user_data.notification_preference is not None
+                or user_data.notification_channels is not None
+                or user_data.direct_message_channel is not None
+            )
+            if touches_preferences:
+                await self._upsert_notification_preferences(
+                    user_id,
+                    notification_preference=(
+                        user_data.notification_preference.value
+                        if user_data.notification_preference is not None
+                        else None
+                    ),
+                    notification_channels=(
+                        self._serialize_notification_channels(user_data.notification_channels)
+                        if user_data.notification_channels is not None
+                        else None
+                    ),
+                    direct_message_channel=(
+                        user_data.direct_message_channel.value
+                        if user_data.direct_message_channel is not None
+                        else None
+                    ),
+                )
+
+            return await self.get_user_by_id(user_id)
+
+        except Exception as e:
+            logger.error(f"Error updating user profile {user_id}: {e}")
+            raise
+
+    async def update_user_notification_preferences(
+        self,
+        user_id: int,
+        preferences: NotificationPreferencesUpdate,
+    ) -> Optional[User]:
+        """Update only the notification preference fields for a user."""
+        profile_update = UserProfileUpdate(
+            notification_preference=preferences.notification_preference,
+            notification_channels=preferences.notification_channels,
+            direct_message_channel=preferences.direct_message_channel,
+        )
+        return await self.update_user_profile(user_id, profile_update)
+
+    async def get_active_users(self) -> List[User]:
+        """Get all active users."""
+        if not self.supabase:
+            raise Exception("Database not initialized")
+
+        try:
+            result = self.supabase.table("users").select("*").eq("is_active", True).execute()
+            users: List[User] = []
+            for record in result.data or []:
+                users.append(await self._build_user(record))
+            return users
+        except Exception as e:
+            logger.error(f"Error getting active users: {e}")
             raise
 
     # Rate Limiting Methods

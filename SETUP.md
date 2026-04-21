@@ -65,13 +65,12 @@ CREATE TABLE IF NOT EXISTS csv_uploads (
 );
 ```
 
-## Step 3: Setup Coordinator Delivery
+## Step 3: Setup Delivery Senders
 
 1. Create a [Twilio account](https://www.twilio.com)
-2. Decide which channels you want to use first
-3. For SMS/WhatsApp, note your Twilio Account SID, Auth Token, and sender number details
-4. For email, note your SMTP credentials
-5. For Telegram, create a bot and note the bot token and chat ID
+2. For SMS/WhatsApp, note your Twilio Account SID, Auth Token, and sender number details
+3. For email, note your SMTP credentials
+4. For Telegram, create a bot and note the bot token and chat ID
 
 ## Step 4: Get AI API Keys
 
@@ -104,16 +103,11 @@ OPENAI_API_KEY=your_openai_key_if_using
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your_supabase_anon_key
 
-# Coordinator Delivery Configuration
+# Sender Configuration
 TWILIO_ACCOUNT_SID=your_twilio_account_sid
 TWILIO_AUTH_TOKEN=your_twilio_auth_token
-COORDINATOR_CHANNELS=sms,email
-COORDINATOR_DELIVERY_CHANNEL=sms
-COORDINATOR_PHONE=+your_coordinator_number
-COORDINATOR_EMAIL=coordinator@example.com
 SMS_FROM=+your_twilio_sms_number
 WHATSAPP_FROM=whatsapp:+14155238886
-COORDINATOR_TO=+your_coordinator_number
 
 # Email Delivery Configuration
 SMTP_HOST=smtp.example.com

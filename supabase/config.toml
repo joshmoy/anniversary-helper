@@ -1,0 +1,34 @@
+# Supabase CLI configuration for the Church Anniversary & Birthday Helper.
+# See https://supabase.com/docs/reference/cli/config for the full schema.
+
+# A unique project id used by `supabase link` / `supabase db push` when no
+# project ref is supplied on the command line. Override with
+# `SUPABASE_PROJECT_ID` in the environment or by passing `--project-ref`.
+project_id = "anniversary-helper"
+
+[db]
+# Port for the local Postgres shadow database that `supabase db diff` uses.
+port = 54322
+# Major version to match production Supabase (Postgres 15).
+major_version = 15
+
+[db.migrations]
+# Schemas we care about for diffing/pushes. Keep in sync with this repo.
+schema_paths = ["./supabase/migrations"]
+
+[api]
+# Expose only the public schema via PostgREST locally.
+schemas = ["public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = false
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"

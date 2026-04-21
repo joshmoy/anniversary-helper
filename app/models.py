@@ -2,7 +2,7 @@
 Database models for the Church Anniversary & Birthday Helper app.
 """
 from datetime import datetime, date
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 from enum import Enum
 
@@ -23,6 +23,20 @@ class AccountType(str, Enum):
     """Supported account types for users."""
     PERSONAL = "personal"
     ORGANIZATION = "organization"
+
+
+class NotificationPreference(str, Enum):
+    """Supported daily delivery behaviors for a user."""
+    PERSONAL_REMINDER = "personal_reminder"
+    DIRECT_TO_CONTACTS = "direct_to_contacts"
+
+
+class NotificationChannel(str, Enum):
+    """Supported delivery channels."""
+    SMS = "sms"
+    EMAIL = "email"
+    WHATSAPP = "whatsapp"
+    TELEGRAM = "telegram"
 
 
 class PersonBase(BaseModel):
@@ -92,8 +106,62 @@ class CSVUpload(BaseModel):
         from_attributes = True
 
 
+def _default_notification_channels() -> List["NotificationChannel"]:
+    """Default set of channels for a personal daily reminder."""
+    return [NotificationChannel.SMS, NotificationChannel.EMAIL]
+
+
+class NotificationPreferencesBase(BaseModel):
+    """Delivery/reminder configuration owned by a single user.
+
+    These settings live on the dedicated `user_notification_preferences` table
+    rather than the `users` table, so identity data stays separate from
+    delivery behavior.
+    """
+    notification_preference: NotificationPreference = Field(
+        NotificationPreference.PERSONAL_REMINDER,
+        description="Whether the user wants a personal daily digest or direct delivery to contacts",
+    )
+    notification_channels: List[NotificationChannel] = Field(
+        default_factory=_default_notification_channels,
+        description="Channels used for personal daily reminders",
+    )
+    direct_message_channel: NotificationChannel = Field(
+        NotificationChannel.SMS,
+        description="Channel used when sending celebration messages directly to contacts",
+    )
+
+
+class NotificationPreferencesCreate(NotificationPreferencesBase):
+    """Payload used to create a notification-preferences row for a user."""
+    user_id: int = Field(..., description="Owner user id")
+
+
+class NotificationPreferencesUpdate(BaseModel):
+    """Partial update payload for a user's notification preferences."""
+    notification_preference: Optional[NotificationPreference] = None
+    notification_channels: Optional[List[NotificationChannel]] = None
+    direct_message_channel: Optional[NotificationChannel] = None
+
+
+class NotificationPreferences(NotificationPreferencesBase):
+    """Complete notification-preferences row with database fields."""
+    id: int
+    user_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class UserBase(BaseModel):
-    """Base model for authenticated user data."""
+    """Base model for authenticated user data.
+
+    Delivery preferences (``notification_preference``, ``notification_channels``,
+    ``direct_message_channel``) are surfaced here for API convenience but are
+    persisted in the dedicated ``user_notification_preferences`` table.
+    """
     username: str = Field(..., description="Unique username", min_length=3, max_length=50)
     email: Optional[str] = Field(
         None,
@@ -103,8 +171,21 @@ class UserBase(BaseModel):
         pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
     )
     full_name: str = Field(..., description="User's full name", min_length=1, max_length=255)
+    phone_number: Optional[str] = Field(None, description="User phone number in E.164 format")
     account_type: AccountType = Field(AccountType.PERSONAL, description="Type of account")
     role: UserRole = Field(UserRole.MEMBER, description="Authorization role")
+    notification_preference: NotificationPreference = Field(
+        NotificationPreference.PERSONAL_REMINDER,
+        description="Whether the user wants a personal daily digest or direct delivery to contacts"
+    )
+    notification_channels: List[NotificationChannel] = Field(
+        default_factory=_default_notification_channels,
+        description="Channels used for personal daily reminders"
+    )
+    direct_message_channel: NotificationChannel = Field(
+        NotificationChannel.SMS,
+        description="Channel used when sending celebration messages directly to contacts"
+    )
     is_active: bool = Field(True, description="Whether this user account is active")
 
 
@@ -156,8 +237,21 @@ class RegisterRequest(BaseModel):
         max_length=255,
         pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
     )
+    phone_number: Optional[str] = Field(None, description="Phone number for reminder delivery", max_length=30)
     password: str = Field(..., description="Password for the new account", min_length=8, max_length=128)
     account_type: AccountType = Field(AccountType.PERSONAL, description="Account type requested by the client")
+    notification_preference: NotificationPreference = Field(
+        NotificationPreference.PERSONAL_REMINDER,
+        description="Daily delivery behavior for this user"
+    )
+    notification_channels: List[NotificationChannel] = Field(
+        default_factory=lambda: [NotificationChannel.SMS, NotificationChannel.EMAIL],
+        description="Channels used for personal daily reminders"
+    )
+    direct_message_channel: NotificationChannel = Field(
+        NotificationChannel.SMS,
+        description="Channel used when sending celebration messages directly to contacts"
+    )
 
 
 class RegisterResponse(BaseModel):
@@ -167,6 +261,24 @@ class RegisterResponse(BaseModel):
     token_type: str = Field("bearer", description="Token type")
     expires_in: int = Field(..., description="Token expiration time in seconds")
     user: UserBase = Field(..., description="Registered user information")
+
+
+class UserProfileUpdate(BaseModel):
+    """Model for updating a user's profile and notification preferences."""
+    full_name: Optional[str] = Field(None, description="User's full name", min_length=1, max_length=255)
+    phone_number: Optional[str] = Field(None, description="Phone number for reminder delivery", max_length=30)
+    notification_preference: Optional[NotificationPreference] = Field(
+        None,
+        description="Whether the user wants a personal daily digest or direct delivery to contacts"
+    )
+    notification_channels: Optional[List[NotificationChannel]] = Field(
+        None,
+        description="Channels used for personal daily reminders"
+    )
+    direct_message_channel: Optional[NotificationChannel] = Field(
+        None,
+        description="Channel used when sending celebration messages directly to contacts"
+    )
 
 
 # Rate Limiting Models
@@ -228,6 +340,12 @@ class RegenerateWishRequest(BaseModel):
     """Model for regenerating anniversary wishes."""
     request_id: str = Field(..., description="ID of the original request to regenerate")
     additional_context: Optional[str] = Field(None, description="Additional context for regeneration", max_length=500)
+
+
+class CoordinatorDeliveryTestRequest(BaseModel):
+    """Model for sending a test coordinator notification."""
+    subject: Optional[str] = Field(None, description="Optional subject override for email delivery", max_length=200)
+    message: Optional[str] = Field(None, description="Optional message body override", max_length=4000)
 
 
 # AI Wish Generation Audit Trail Models
